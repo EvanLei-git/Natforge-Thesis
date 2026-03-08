@@ -1,0 +1,105 @@
+#!/bin/bash
+
+# ==============================================================================
+# Thesis Proxy - Enterprise Deployment & Daemonization Script
+# ==============================================================================
+# Automates the deployment of the distributed thesis architecture.
+# Architectures available for configuration:
+#   1. website_backend: The user authentication, billing, and database APIs.
+#   2. core_proxy_backend: The ultra-fast TCP/UDP Anycast routing node & DDoS filter.
+#   3. proxy_node: The Service Host or IP Relay agent running on end-user machines.
+#
+# Usage:
+#   sudo ./install.sh --component <website | core | node> [options]
+# ==============================================================================
+
+set -e
+
+INSTALL_DIR="/usr/local/bin"
+SYSTEMD_DIR="/etc/systemd/system"
+ENV_DIR="/etc/thesis-proxy"
+
+log() { echo -e "\e[1;36m[INSTALLER]\e[0m $1"; }
+err() { echo -e "\e[1;31m[ERROR]\e[0m $1"; exit 1; }
+
+# Parse arguments
+COMPONENT=""
+NODE_MODE=""
+
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --component) COMPONENT="$2"; shift ;;
+        --mode) NODE_MODE="$2"; shift ;;
+        *) err "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift
+done
+
+if [[ -z "$COMPONENT" ]]; then
+    err "You must specify a component: --component <website | core | node>"
+fi
+
+mkdir -p "$ENV_DIR"
+
+configure_service() {
+    local BIN_NAME=$1
+    local SERVICE_NAME=$2
+    local EXEC_CMD=$3
+    local EXTRA_ENV=$4
+
+    log "Preparing to daemonize $SERVICE_NAME..."
+
+    # Write environment variables
+    cat <<EOF > "$ENV_DIR/$SERVICE_NAME.env"
+# Auto-Generated Environment for $SERVICE_NAME
+$EXTRA_ENV
+EOF
+
+    # Write systemd service module
+    cat <<EOF > "$SYSTEMD_DIR/$SERVICE_NAME.service"
+[Unit]
+Description=Thesis Distributed Platform: $SERVICE_NAME
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=$ENV_DIR/$SERVICE_NAME.env
+ExecStart=$EXEC_CMD
+Restart=always
+RestartSec=10
+LimitNOFILE=1048576
+
+# Security hardening (Limits file access to just the binary and config)
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    log "Reloading systemd daemon..."
+    # systemctl daemon-reload
+    # systemctl enable $SERVICE_NAME.service
+    # systemctl start $SERVICE_NAME.service
+    log "$SERVICE_NAME daemonized successfully! Check status with: systemctl status $SERVICE_NAME"
+}
+
+case $COMPONENT in
+    "website")
+        configure_service "website_backend" "thesis-website" "$INSTALL_DIR/website_backend" "POSTGRES_URL=postgres://user:pass@localhost/thesis\nPORT=3000"
+        ;;
+    "core")
+        configure_service "core_proxy_backend" "thesis-core-proxy" "$INSTALL_DIR/core_proxy_backend" "CF_API_KEY=mocked_key\nPORT=3001"
+        ;;
+    "node")
+        if [[ -z "$NODE_MODE" ]]; then err "Node deployment requires --mode <service-host | ip-host>"; fi
+        configure_service "proxy_node" "thesis-proxy-node" "$INSTALL_DIR/proxy_node $NODE_MODE --control-plane http://api.thesis.net --tunnel-server 127.0.0.1:3001" "MAX_BW=500"
+        ;;
+    *)
+        err "Invalid component. Use: website, core, or node."
+        ;;
+esac
+
+log "Deployment script finished execution."

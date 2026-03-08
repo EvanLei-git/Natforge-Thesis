@@ -1,0 +1,32 @@
+# target directory for Rust builds
+/target/
+**/*.rs.bk
+
+# environment variables
+.env
+.env.*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ignore built frontend assets if they are ever generated
+/frontend/dist/
+/frontend/build/
+/frontend/node_modules/
+
+# Postgres/Redis data if run locally via docker-compose
+/data/
+/postgres-data/
+/redis-data/

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP Host Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="css/style.css" rel="stylesheet">
+</head>
+<body>
+    <div class="d-flex">
+        <!-- Sidebar -->
+        <div class="sidebar p-3 d-flex flex-column" style="width: 250px;">
+            <h4 class="mb-4 d-flex align-items-center">
+                <span class="me-2">🌐</span> Thesis Proxy
+            </h4>
+            <ul class="nav flex-column mb-auto">
+                <li class="nav-item">
+                    <a href="dashboard.html" class="nav-link">🏠 Service Host</a>
+                </li>
+                <li class="nav-item">
+                    <a href="ipbase.html" class="nav-link active">⚡ IP Host Panel</a>
+                </li>
+                <li class="nav-item mt-4">
+                    <a href="admin.html" class="nav-link text-warning">🛡️ Admin Panel</a>
+                </li>
+            </ul>
+            <hr>
+            <a href="index.html" class="nav-link text-danger">🚪 Logout</a>
+        </div>
+
+        <!-- Main Content -->
+        <div class="flex-grow-1 p-4 bg-light">
+            <h2 class="mb-4">IP Host Dashboard</h2>
+            <p class="text-muted">Volunteer your residential non-CGNAT connection to act as a direct P2P tunneling relay for the network.</p>
+
+            <div class="row mb-4">
+                <div class="col-md-4">
+                    <div class="card p-3 shadow-sm border-0 border-start border-warning border-4">
+                        <div class="text-muted small">Relay Status</div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h4 class="mb-0 text-success">Active</h4>
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" role="switch" checked id="relayToggle" onchange="toggleRelay()">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card p-3 shadow-sm border-0 border-start border-info border-4">
+                        <div class="text-muted small">Data Relayed (This Month)</div>
+                        <h4 class="mb-0">45.2 GB</h4>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mb-4">
+                <div class="card-header bg-white">
+                    <h5 class="mb-0">Bandwidth Configuration</h5>
+                </div>
+                <div class="card-body">
+                    <form onsubmit="event.preventDefault(); alert('Calls PUT /api/user/bandwidth_limit');">
+                        <div class="mb-3">
+                            <label class="form-label text-muted">Maximum Relay Bandwidth (Mbps)</label>
+                            <input type="range" class="form-range" min="10" max="1000" id="bandwidthRange" value="100" oninput="document.getElementById('bwLabel').innerText = this.value + ' Mbps'">
+                            <div class="fw-bold" id="bwLabel">100 Mbps</div>
+                        </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="geoPref" checked>
+                            <label class="form-check-label text-muted" for="geoPref">Allow connections purely from my geographic region to reduce latency.</label>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Configuration</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="js/app.js"></script>
+    <script>
+        function toggleRelay() {
+            const isActive = document.getElementById('relayToggle').checked;
+            alert('Calls POST /api/ip_host/status with active: ' + isActive);
+        }
+    </script>
+</body>
+</html>
