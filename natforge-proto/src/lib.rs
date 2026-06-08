@@ -236,6 +236,8 @@ pub async fn read_preamble<R: AsyncRead + Unpin>(
     let mut rl = [0u8; 2];
     r.read_exact(&mut rl).await?;
     let replay_len = u16::from_be_bytes(rl) as usize;
+    // Bounded by u16 on the wire; assert the explicit cap defensively before allocating.
+    anyhow::ensure!(replay_len <= MAX_REPLAY, "replay_len {replay_len} exceeds cap");
     let mut replay = vec![0u8; replay_len];
     if replay_len > 0 {
         r.read_exact(&mut replay).await?;
