@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+natforge-proto = { path = "../natforge-proto" }
 anyhow.workspace = true
 clap = { version = "4.5.60", features = ["derive"] }
 futures-util = "0.3.32"

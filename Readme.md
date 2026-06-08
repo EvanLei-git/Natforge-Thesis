@@ -1,6 +1,10 @@
-# THESIS PROPOSAL
+# THESIS PROPOSAL — NatForge
 
 **Title:** Design and Implementation of a Hybrid Reverse Proxy and P2P Tunneling Platform with Decentralized Edge Nodes
+
+**Platform name:** NatForge (`natforge.com`)
+
+> **Implementation status:** the platform described below is implemented and tested. The reverse tunnel (yamux-multiplexed TCP relay), Argon2+JWT authentication, the RFC 8628 device flow, the role-aware dashboards, admin abuse controls, and the IP-host edge relay all work end-to-end (see `Thesis.md`, Chapter 5). WireGuard encapsulation, kernel eBPF drops, and direct UDP hole punching are designed and simulated/deferred as documented.
 
 **Author:** Evangelos Leivaditis
 
@@ -27,7 +31,7 @@ Crucially, to protect the privacy of Edge Nodes and ensure high throughput, all 
 
 The system serves three distinct user roles, managed through a unified Bootstrap-based Web UI:
 
-- **The Service Host (Standard User):** A user who wants to host a game server (e.g., Minecraft) from their home PC. They are assigned a random subdomain (e.g., `duck-main.test.com`) and up to 2 specific public ports.
+- **The Service Host (Standard User):** A user who wants to host a game server (e.g., Minecraft) from their home PC. They are assigned a random subdomain (e.g., `duck-main.natforge.com`) and up to 2 specific public ports.
 - **The IP Host / Edge Node (Superuser):** A user with a public, non-CGNAT IP who volunteers to share their network. They act as a residential relay for other users, managing their bandwidth limits via the web dashboard.
 - **The Administrator:** Oversees the entire network, monitors active tunnels, manages global bandwidth, and handles abuse/banning (including region blocking for specific geolocations for both hosts and IP addresses) via an Admin Panel.
 
@@ -55,7 +59,7 @@ The core high-throughput networking is isolated in the `core_proxy_backend` appl
 The client-side is driven by a single compiled Rust binary deployed via an Ubuntu script, serving both host types:
 
 - **Initialization:** When run, the CLI asks the user to select their role: Service Host or IP Host.
-- **Device Authorization Flow:** To securely link the headless CLI to the web account, the system utilizes the OAuth 2.0 Device Authorization Grant flow (RFC 8628) [7]. The CLI securely outputs: *"Please go to thesis.net/device and enter code XYZ."*
+- **Device Authorization Flow:** To securely link the headless CLI to the web account, the system utilizes the OAuth 2.0 Device Authorization Grant flow (RFC 8628) [7]. The CLI securely outputs: *"Please go to natforge.com/device and enter code XYZ."*
 - **Execution (Service Host):** Once authenticated, the server allocates a subdomain (e.g., `duck-main`) and 2 ports. The client connects to the central server, and the daemon is registered to auto-start on PC boot via systemd.
 - **Execution (IP Host):** The client registers its public IP with the central control plane. The user is upgraded to a "Superuser" in the web UI, where they can configure maximum allowed bandwidth and toggle their active status.
 
@@ -64,7 +68,7 @@ The client-side is driven by a single compiled Rust binary deployed via an Ubunt
 ### Must Have
 - **Unified Rust CLI:** A single agent capable of running in both "Service Host" and "IP Host" modes, with auto-start daemon registration.
 - **Device Authorization Flow:** Secure headless login mapping via a temporary string and web endpoint.
-- **Dynamic Routing:** The central server correctly routes requests like `duck-main.test.com:25565` down the active Yamux tunnel.
+- **Dynamic Routing:** The central server correctly routes requests like `duck-main.natforge.com:25565` down the active Yamux tunnel.
 - **Web Dashboards (Bootstrap):** Separate functional panels for Admin, User, and IP Host management.
 - **Basic Security:** TLS termination at the web-server level for the UI and API.
 
@@ -86,7 +90,7 @@ The client-side is driven by a single compiled Rust binary deployed via an Ubunt
 
 The thesis defense will feature a multi-device live demonstration:
 - **Infrastructure:** 1 Cloud VM (Ubuntu 22.04) running the Axum API, Bootstrap Web UI, PostgreSQL, and Redis.
-- **Scenario A (Direct/Relay Game Hosting):** Start a Minecraft server on Laptop A. Run the CLI in Service Host mode. Connect to the provided `duck-main.test.com` via Laptop B over a 4G hotspot.
+- **Scenario A (Direct/Relay Game Hosting):** Start a Minecraft server on Laptop A. Run the CLI in Service Host mode. Connect to the provided `duck-main.natforge.com` via Laptop B over a 4G hotspot.
 - **Scenario B (P2P/Edge Node Routing):** Run the CLI in IP Host mode on Laptop C. Configure Laptop A to route through Laptop C. Verify the IP change using a terminal request to an IP-checking service (such as `curl ifconfig.me`), proving the decentralized relay functions correctly.
 
 ## 7. Security & Ethical Considerations

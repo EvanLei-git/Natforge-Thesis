@@ -1,13 +1,49 @@
-# Core Proxy Backend Documentation
+# Core Proxy Backend (Data Plane) — Documentation
 
-## Dedicated Tunneling Engine (TCP/UDP)
-Unlike the `website_backend` which handles authentication and billing logic, this repository governs the actual **Data Plane**. It is responsible for bridging users behind NATs with the broader, unrestrictive web.
+`core_proxy_backend` is the NatForge **data plane**: a Tokio service that performs the actual byte relaying. It accepts a single TCP control connection per agent, upgrades it to a **yamux** multiplexed session, binds a dedicated public port per tunnel, and bridges every inbound public connection to a fresh multiplexed stream the agent forwards to the local service.
 
-### Structural Separation
-- `/src/api/` -> Extremely lightweight internal routes. Used purely for the Web Backend to securely signal down that a new Wireguard/Yamux connection is approved.
-- `/src/tunnel/` -> Replaces standard proxy implementations with `boringtun` logic. Allocates explicitly **1 TCP Port** and **1 UDP Port** per connected `end_user_id` mapped dynamically.
-- `/src/ddos/` -> Volumetric heuristics mapping IP structs. Scans bytes flowing into the Core Proxy. If packets exceed 10K/second on a single IP footprint, an eBPF drop instruction is triggered protecting the overarching proxy array.
-- `/src/dns/` -> Mock logic designed to connect directly to the Cloudflare API (`POST /client/v4/zones/...`). Whenever an Anycast proxy spins up, this engine automatically generates a randomized SRV (`_minecraft._tcp`) or generic CNAME record directing global traffic specifically to the allocated `tcp_port`.
+## Listeners
+- **Agent control plane** — default `:4000`. Agents connect here; after a length-prefixed JSON handshake the socket becomes a yamux session (core = client, agent = server).
+- **Public port pool** — default `20000`–`20100`. One port allocated per tunnel; end users connect here.
+- **Internal API** — default `:3001`. Consumed by the website control plane.
 
-### Bandwidth Tracking
-Wireguard/Yamux byte length is mapped into the `PeerTunnel` struct internally. These values are batched and fired securely to the `website_backend` for SQL persistence to track economics/margins accurately for volunteer Edge Nodes!
+## Data path (per agent)
+1. Read length-prefixed `AgentHello { tunnel_token, local_port, role }` (exact `read_exact`, no over-read).
+2. Verify the tunnel token (HS256, shared secret) — no database access (stateless).
+3. Refuse globally blocked local ports.
+4. Allocate a public port; bind its listener.
+5. Reply `CoreReply::Ok { public_host, public_port, subdomain }`, then upgrade to yamux.
+6. Per public connection: DDoS check → open outbound yamux stream → `copy_bidirectional` (in-memory, zero-disk) with byte accounting.
+7. Report `tunnel_up`, provision DNS SRV (mock), report bandwidth every 5s.
+8. On agent disconnect: abort listener, free port, report `tunnel_down`.
+
+## Module layout
+```
+src/
+├── main.rs            boots internal API, control plane, periodic policy refresh
+├── config.rs          ports, public host, port pool, secrets
+├── jwt.rs             tunnel-token verification (shared secret)
+├── state.rs           CoreState: tunnels, free-port pool, ddos, blocked ports
+├── tunnel/
+│   ├── mod.rs         control listener + per-agent handler (the core data path)
+│   ├── mux.rs         single-borrow yamux client driver (poll_fn state machine)
+│   └── wireguard.rs   simulated WireGuard peer / bandwidth accounting
+├── ddos/filter.rs     per-IP sliding-window connection-rate guard
+├── dns/cloudflare.rs  SRV-record provisioning (mock unless CF_API_TOKEN set)
+├── api/routes.rs      internal API: health, list/close tunnels
+└── reporter.rs        outbound reporting to the control plane
+```
+
+## Internal API
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | Liveness |
+| GET | `/internal/tunnels` | Snapshot of live tunnels + byte counters |
+| POST | `/internal/tunnels/{subdomain}` | Force-close a tunnel (dashboard "Stop") |
+
+## Simulated vs. real
+- **Real:** yamux multiplexing, the full TCP relay, byte accounting, the connection-rate DDoS heuristic, port-policy enforcement, the internal reporting channel.
+- **Simulated (clearly labeled):** WireGuard encapsulation (`wireguard.rs`), kernel eBPF/XDP drop (the decision is real, the kernel action logged), and the live Cloudflare API call (logged by default; real if `CF_API_TOKEN` is set).
+
+## Configuration (env)
+`CORE_INTERNAL_PORT` (3001), `CORE_CONTROL_PORT` (4000), `PUBLIC_HOST`, `PUBLIC_PORT_MIN`/`MAX`, `WEBSITE_URL`, `JWT_SECRET`, `INTERNAL_SECRET`, `CF_API_TOKEN`, `CF_ZONE_ID`.

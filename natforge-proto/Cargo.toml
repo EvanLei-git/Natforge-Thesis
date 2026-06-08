@@ -1,0 +1,17 @@
+[package]
+name = "natforge-proto"
+version = "0.1.0"
+edition = "2024"
+
+# Shared wire contract between core_proxy_backend (data plane) and proxy_node
+# (agent): the control-plane handshake types, the signed tunnel-token claims, and
+# the per-stream binary preamble codec. Keeping these in one crate means the two
+# sides can never drift out of sync.
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+anyhow.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "rt"] }

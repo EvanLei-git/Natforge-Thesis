@@ -3,73 +3,50 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Administrator Panel</title>
+    <title>NatForge — Admin</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="css/style.css" rel="stylesheet">
+    <link href="../assets/css/style.css" rel="stylesheet">
 </head>
 <body>
     <div class="d-flex">
-        <!-- Sidebar -->
         <div class="sidebar p-3 d-flex flex-column" style="width: 250px;">
-            <h4 class="mb-4 d-flex align-items-center text-warning">
-                <span class="me-2">🛡️</span> Admin Panel
-            </h4>
+            <h4 class="mb-4 d-flex align-items-center text-warning"><span class="me-2">🛡️</span> Admin</h4>
             <ul class="nav flex-column mb-auto">
-                <li class="nav-item">
-                    <a href="dashboard.html" class="nav-link">🏠 Service Host</a>
-                </li>
-                <li class="nav-item">
-                    <a href="ipbase.html" class="nav-link">⚡ IP Host Panel</a>
-                </li>
+                <li class="nav-item"><a href="dashboard.html" class="nav-link">🏠 Service Host</a></li>
+                <li class="nav-item"><a href="ipbase.html" class="nav-link">⚡ IP Host (Edge Node)</a></li>
+                <li class="nav-item"><a href="admin.html" class="nav-link active text-warning">🛡️ Admin Panel</a></li>
             </ul>
             <hr>
-            <a href="index.html" class="nav-link text-danger">🚪 Logout</a>
+            <a href="#" onclick="logout()" class="nav-link text-danger">🚪 Logout</a>
         </div>
 
-        <!-- Main Content -->
         <div class="flex-grow-1 p-4 bg-light">
-            <h2 class="mb-4">Network Administration</h2>
+            <h2 class="mb-3">Network Administration</h2>
 
-            <!-- Region Blocking Section (Requested Feature) -->
+            <div class="row mb-4" id="statCards"></div>
+
+            <!-- Region blocking -->
             <div class="card shadow-sm mb-4 border-danger">
-                <div class="card-header bg-danger text-white">
-                    <h5 class="mb-0">Geographic & Region Blocking Interface</h5>
-                </div>
+                <div class="card-header bg-danger text-white"><h5 class="mb-0">Geographic / Region Blocking</h5></div>
                 <div class="card-body">
-                    <p class="text-muted small">Ban specific geographic regions from acting as IP Hosts or attempting to connect to Service Hosts to mitigate abuse.</p>
-                    
+                    <p class="text-muted small">Any agent or end-user IP geolocated to a blocked country is rejected by the control plane.</p>
                     <div class="row">
                         <div class="col-md-7">
-                            <div class="region-map-placeholder mb-3">
-                                [ Interactive Vector Map Placeholder (e.g. jVectorMap) ]<br>
-                                (Click a country to block all incoming IP blocks associated with it)
-                            </div>
+                            <div class="region-map-placeholder mb-3">[ Vector map placeholder — click a country to block ]</div>
                         </div>
                         <div class="col-md-5">
                             <h6 class="fw-bold">Active Region Blocks</h6>
-                            <ul class="list-group mb-3">
-                                <li class="list-group-item d-flex justify-content-between align-items-center pb-2 pt-2">
-                                    <div>
-                                        <span class="badge bg-secondary me-2">RU</span> Russia
-                                    </div>
-                                    <button class="btn btn-sm btn-outline-danger" onclick="alert('Calls DELETE /api/admin/region_blocks/RU')">Unban</button>
-                                </li>
-                                <li class="list-group-item d-flex justify-content-between align-items-center pb-2 pt-2">
-                                    <div>
-                                        <span class="badge bg-secondary me-2">CN</span> China
-                                    </div>
-                                    <button class="btn btn-sm btn-outline-danger" onclick="alert('Calls DELETE /api/admin/region_blocks/CN')">Unban</button>
-                                </li>
-                            </ul>
-                            
-                            <form class="d-flex" onsubmit="event.preventDefault(); alert('Calls POST /api/admin/region_blocks with country code');">
-                                <select class="form-select me-2" required>
-                                    <option value="" selected disabled>Select Country to Ban...</option>
-                                    <option value="US">United States (US)</option>
-                                    <option value="GB">United Kingdom (GB)</option>
-                                    <option value="BY">Belarus (BY)</option>
+                            <ul class="list-group mb-3" id="regionList"></ul>
+                            <form class="d-flex" id="regionForm">
+                                <select class="form-select me-2" id="regionSelect" required>
+                                    <option value="" selected disabled>Select country…</option>
+                                    <option value="RU">Russia (RU)</option>
+                                    <option value="CN">China (CN)</option>
                                     <option value="KP">North Korea (KP)</option>
                                     <option value="IR">Iran (IR)</option>
+                                    <option value="BY">Belarus (BY)</option>
+                                    <option value="US">United States (US)</option>
+                                    <option value="GB">United Kingdom (GB)</option>
                                 </select>
                                 <button type="submit" class="btn btn-danger">Block</button>
                             </form>
@@ -78,30 +55,95 @@
                 </div>
             </div>
 
-            <!-- Global Port Ban Section -->
+            <!-- Port bans -->
             <div class="card shadow-sm mb-4">
-                <div class="card-header bg-white">
-                    <h5 class="mb-0">Globally Blocked TCP/UDP Ports</h5>
-                </div>
+                <div class="card-header bg-white"><h5 class="mb-0">Globally Blocked Ports</h5></div>
                 <div class="card-body">
-                    <p class="text-muted small">Prevent tunneling of frequently abused ports to protect IP Hosts.</p>
-                    <div class="d-flex gap-2 flex-wrap">
-                        <span class="badge bg-dark fs-6 pb-2 pt-2 pe-3 ps-3">Port 25 (SMTP) <button class="btn-close btn-close-white ms-2 pb-0 pt-0" style="font-size: 0.5rem;"></button></span>
-                        <span class="badge bg-dark fs-6 pb-2 pt-2 pe-3 ps-3">Port 465 (SMTPS) <button class="btn-close btn-close-white ms-2 pb-0 pt-0" style="font-size: 0.5rem;"></button></span>
-                        <span class="badge bg-dark fs-6 pb-2 pt-2 pe-3 ps-3">Port 22 (SSH) <button class="btn-close btn-close-white ms-2 pb-0 pt-0" style="font-size: 0.5rem;"></button></span>
-                    </div>
-                    
-                    <form class="mt-3 d-flex" style="max-width: 300px;" onsubmit="event.preventDefault(); alert('Calls POST /api/admin/port_blocks');">
-                        <input type="number" class="form-control me-2" placeholder="Port Number" required>
+                    <p class="text-muted small">Prevent tunneling of abused ports (e.g. SMTP 25/465/587) to protect edge nodes.</p>
+                    <div class="d-flex gap-2 flex-wrap mb-3" id="portList"></div>
+                    <form class="d-flex" style="max-width: 320px;" id="portForm">
+                        <input type="number" min="1" max="65535" id="portInput" class="form-control me-2" placeholder="Port number" required>
                         <button type="submit" class="btn btn-outline-dark">Add</button>
                     </form>
                 </div>
             </div>
-            
+
+            <!-- All tunnels -->
+            <div class="card shadow-sm">
+                <div class="card-header bg-white"><h5 class="mb-0">All Active Tunnels</h5></div>
+                <div class="card-body p-0">
+                    <table class="table table-hover mb-0 align-middle">
+                        <thead class="table-light"><tr><th>Tunnel</th><th>Status</th><th>Routes</th><th>Traffic</th></tr></thead>
+                        <tbody id="allTunnels"><tr><td colspan="4" class="text-center text-muted py-3">Loading…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
-    
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="js/app.js"></script>
+    <script src="../api/client.js"></script>
+    <script src="../assets/js/app.js"></script>
+    <script>
+        if (requireAuth(true)) { refresh(); setInterval(refresh, 5000); }
+
+        async function refresh() {
+            try {
+                const [stats, regions, ports, tunnels] = await Promise.all([
+                    API.getStats(), API.getRegionBlocks(), API.getPortBlocks(), API.getAllTunnels()
+                ]);
+                renderStats(stats); renderRegions(regions); renderPorts(ports); renderTunnels(tunnels);
+            } catch (err) { toast(err.message, 'danger'); }
+        }
+
+        function card(label, value, color) {
+            return `<div class="col-md-2 col-sm-4 mb-2"><div class="card p-3 shadow-sm border-0 border-start border-${color} border-4">
+                <div class="text-muted small">${label}</div><h4 class="mb-0">${value}</h4></div></div>`;
+        }
+        function renderStats(s) {
+            document.getElementById('statCards').innerHTML =
+                card('Users', s.total_users, 'primary') +
+                card('Tunnels', s.active_tunnels, 'success') +
+                card('Edge Nodes', s.active_edge_nodes, 'warning') +
+                card('Relayed', fmtBytes(s.total_bytes_relayed), 'info') +
+                card('Regions', s.blocked_regions, 'danger') +
+                card('Ports', s.blocked_ports, 'dark');
+        }
+        function renderRegions(list) {
+            document.getElementById('regionList').innerHTML = list.length ? list.map(cc =>
+                `<li class="list-group-item d-flex justify-content-between align-items-center">
+                    <span><span class="badge bg-secondary me-2">${cc}</span></span>
+                    <button class="btn btn-sm btn-outline-danger" onclick="unblockRegion('${cc}')">Unban</button></li>`
+            ).join('') : '<li class="list-group-item text-muted">None</li>';
+        }
+        function renderPorts(list) {
+            document.getElementById('portList').innerHTML = list.length ? list.map(p =>
+                `<span class="badge bg-dark fs-6 p-2">Port ${p}
+                    <button class="btn-close btn-close-white ms-2" style="font-size:.5rem" onclick="unblockPort(${p})"></button></span>`
+            ).join('') : '<span class="text-muted">None</span>';
+        }
+        function renderTunnels(list) {
+            document.getElementById('allTunnels').innerHTML = list.length ? list.map(t =>
+                `<tr><td>${t.full_host}<div class="text-muted small">#${t.tunnel_id}</div></td>
+                 <td><span class="badge bg-${t.status==='online'?'success':'secondary'}">${t.status}</span></td>
+                 <td class="small">${t.routes.map(r => r.mode + ':' + r.local_port).join(', ')}</td>
+                 <td class="small text-muted">↓${fmtBytes(t.bytes_in)} / ↑${fmtBytes(t.bytes_out)}</td></tr>`
+            ).join('') : '<tr><td colspan="4" class="text-center text-muted py-3">No active tunnels</td></tr>';
+        }
+
+        async function unblockRegion(cc) { try { await API.removeRegionBlock(cc); refresh(); } catch (e) { toast(e.message,'danger'); } }
+        async function unblockPort(p)   { try { await API.removePortBlock(p); refresh(); } catch (e) { toast(e.message,'danger'); } }
+
+        document.getElementById('regionForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try { await API.addRegionBlock(document.getElementById('regionSelect').value); refresh(); }
+            catch (err) { toast(err.message, 'danger'); }
+        });
+        document.getElementById('portForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try { await API.addPortBlock(parseInt(document.getElementById('portInput').value, 10)); e.target.reset(); refresh(); }
+            catch (err) { toast(err.message, 'danger'); }
+        });
+    </script>
 </body>
 </html>

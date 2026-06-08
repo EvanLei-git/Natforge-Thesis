@@ -1,33 +1,75 @@
-use axum::{routing::post, Router, Json};
-use serde::{Deserialize, Serialize};
+//! Lightweight internal API for the Core Proxy, consumed by the website control
+//! plane (never by end users): observe live tunnels and force one down when a user
+//! clicks "Stop".
 
-#[derive(Deserialize)]
-pub struct TunnelAllocationReq {
-    pub end_user_id: String,
-    pub target_subdomain: String,
-}
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+use axum::{
+    extract::{Path, State},
+    routing::{get, post},
+    Json, Router,
+};
+use serde::Serialize;
+use serde_json::json;
+
+use crate::state::CoreState;
 
 #[derive(Serialize)]
-pub struct TunnelAllocationRes {
-    pub allocated_tcp_port: u16,
-    pub allocated_udp_port: u16,
-    pub wireguard_pubkey: String,
+pub struct TunnelView {
+    pub tunnel_id: i64,
+    pub subdomain: String,
+    pub owner_id: i32,
+    pub public_ports: Vec<u16>,
+    pub has_http: bool,
+    pub has_https: bool,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
 }
 
-/// Endpoint called strictly by the Internal `website_backend` or authorized daemons 
-/// to spin up a new high-speed proxy tunnel.
-async fn allocate_tunnel(Json(payload): Json<TunnelAllocationReq>) -> Json<TunnelAllocationRes> {
-    tracing::info!("Core Engine allocating Anycast Proxy for {} on {}", payload.end_user_id, payload.target_subdomain);
-    
-    // In production, this dynamically binds a TCP and UDP listener based on available system ports.
-    Json(TunnelAllocationRes {
-        allocated_tcp_port: 25565,
-        allocated_udp_port: 25565,
-        wireguard_pubkey: "mock_wg_pubkey_xyz123".to_string(),
-    })
+async fn health() -> Json<serde_json::Value> {
+    Json(json!({ "status": "ok", "service": "core_proxy_backend" }))
 }
 
-pub fn core_routes() -> Router {
+async fn list_tunnels(State(state): State<Arc<CoreState>>) -> Json<Vec<TunnelView>> {
+    let tunnels = state.tunnels.read().await;
+    let out = tunnels
+        .values()
+        .map(|t| TunnelView {
+            tunnel_id: t.tunnel_id,
+            subdomain: t.subdomain.clone(),
+            owner_id: t.owner_id,
+            public_ports: t.public_ports.clone(),
+            has_http: t.has_http,
+            has_https: t.has_https,
+            bytes_in: t.stats.bytes_in.load(Ordering::Relaxed),
+            bytes_out: t.stats.bytes_out.load(Ordering::Relaxed),
+        })
+        .collect();
+    Json(out)
+}
+
+/// Force a tunnel down: abort its yamux driver, which collapses the session and
+/// triggers the normal teardown path in `handle_agent`.
+async fn stop_tunnel(
+    State(state): State<Arc<CoreState>>,
+    Path(subdomain): Path<String>,
+) -> Json<serde_json::Value> {
+    if let Some(t) = state.tunnels.read().await.get(&subdomain) {
+        t.driver_abort.abort();
+        for jh in &t.listener_handles {
+            jh.abort();
+        }
+        Json(json!({ "status": "stopping", "subdomain": subdomain }))
+    } else {
+        Json(json!({ "status": "not_found", "subdomain": subdomain }))
+    }
+}
+
+pub fn core_routes(state: Arc<CoreState>) -> Router {
     Router::new()
-        .route("/internal/allocate_tunnel", post(allocate_tunnel))
+        .route("/health", get(health))
+        .route("/internal/tunnels", get(list_tunnels))
+        .route("/internal/tunnels/{subdomain}/stop", post(stop_tunnel))
+        .with_state(state)
 }

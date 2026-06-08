@@ -1,144 +1,74 @@
-pub mod models;
+//! NatForge — Website Backend (control plane).
+//!
+//! User authentication (Argon2 + JWT), the RFC 8628 device flow, multi-route
+//! tunnel reservation, IP-host configuration, the admin panel, the internal API
+//! the core proxy reports to, and serving of the static Bootstrap frontend.
+//! Durable state in PostgreSQL, ephemeral state in Redis.
+
+pub mod config;
 pub mod db;
-pub mod routes;
 pub mod handlers;
+pub mod jwt;
+pub mod models;
+pub mod routes;
 
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use axum::{
-    routing::{get, post, put, delete},
-    Router,
-    Json,
-    extract::{State, Path},
-};
+use std::time::Duration;
+
+use axum::response::Redirect;
+use axum::routing::get;
 use axum::serve;
-use serde::{Deserialize, Serialize};
+use axum::Router;
+use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
+use tower_http::trace::TraceLayer;
 
-use db::connection::AppState;
-use routes::auth_routes::initialize_routes;
-use models::user::TunnelInfo;
+use crate::config::Config;
+use crate::db::connection::AppState;
+
+/// Tunnels silent longer than this are reclaimed (ports freed, row deleted).
+const RECONCILE_GRACE_SECS: i64 = 3600;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    
-    // In production, I would initialize `sqlx::PgPool` here.
-    let shared_state = Arc::new(AppState::default());
+    dotenvy::dotenv().ok();
 
-    // Setup initial mock admin blocklists
-    shared_state.region_blocks.write().await.insert("RU".to_string());
-    shared_state.port_blocks.write().await.insert(25);
-    shared_state.port_blocks.write().await.insert(465);
+    let config = Config::from_env();
+    tracing::info!("connecting to PostgreSQL + Redis…");
+    let state = AppState::connect(config.clone()).await?;
+    tracing::info!("database ready; migrations applied; port pool seeded for node '{}'", config.node_id);
 
-    let auth_router = initialize_routes(shared_state.clone());
+    // Periodic reconciliation: reclaim ports from abandoned tunnels.
+    {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                ticker.tick().await;
+                match crate::db::queries::reconcile_abandoned(&st.db.pg, RECONCILE_GRACE_SECS).await {
+                    Ok(n) if n > 0 => tracing::info!("reconciliation reclaimed {n} abandoned tunnel(s)"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reconciliation error: {e}"),
+                }
+            }
+        });
+    }
 
+    let api = routes::api_router(state.clone());
+    let serve_dir = ServeDir::new(&config.frontend_dir);
     let app = Router::new()
-        .merge(auth_router)
-        // Service Host Flow
-        .route("/api/tunnels", get(get_tunnels))
-        .route("/api/tunnels/request", post(request_tunnel))
-        .route("/api/tunnels/:subdomain", delete(stop_tunnel))
-        // IP Host Flow
-        .route("/api/ip_host/status", post(set_relay_status))
-        .route("/api/user/preferences", put(update_preferences))
-        // Admin Flow (Region Blocking)
-        .route("/api/admin/region_blocks", get(get_region_blocks).post(add_region_block))
-        .route("/api/admin/region_blocks/:country_code", delete(remove_region_block))
-        .route("/api/admin/port_blocks", post(add_port_block))
-        .route("/api/admin/port_blocks/:port", delete(remove_port_block))
-        .route("/api/register", post(legacy_register_node)) // Legacy from previous step
-        .with_state(shared_state);
+        .route("/", get(|| async { Redirect::to("/views/index.html") }))
+        .route("/device", get(|| async { Redirect::to("/views/index.html") }))
+        .merge(api)
+        .fallback_service(serve_dir)
+        .layer(CorsLayer::permissive())
+        .layer(TraceLayer::new_for_http());
 
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 3000));
-    tracing::info!("Website Backend (Auth/Billing) listening on {}", addr);
-    
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    serve(listener, app).await.unwrap();
-}
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.port));
+    tracing::info!("NatForge website backend listening on http://{addr}");
+    tracing::info!("serving frontend from '{}'", config.frontend_dir);
 
-// ==========================================
-// Handlers that haven't been modularized yet
-// ==========================================
-
-async fn get_tunnels(State(state): State<Arc<AppState>>) -> Json<Vec<TunnelInfo>> {
-    let tunnels = state.active_tunnels.read().await;
-    let list: Vec<TunnelInfo> = tunnels.values().cloned().collect();
-    Json(list)
-}
-
-async fn request_tunnel(State(state): State<Arc<AppState>>) -> Json<TunnelInfo> {
-    let subdomain = "duck-new".to_string(); // In reality, generate randomly
-    let info = TunnelInfo {
-        subdomain: subdomain.clone(),
-        allocated_tcp_port: 25565,
-        allocated_udp_port: 25565,
-        status: "allocating".to_string(),
-    };
-    state.active_tunnels.write().await.insert(subdomain, info.clone());
-    Json(info)
-}
-
-async fn stop_tunnel(State(state): State<Arc<AppState>>, Path(subdomain): Path<String>) -> Json<serde_json::Value> {
-    state.active_tunnels.write().await.remove(&subdomain);
-    Json(serde_json::json!({ "status": "tunnel_closed" }))
-}
-
-#[derive(Deserialize)]
-struct RelayStatusReq { active: bool }
-async fn set_relay_status(Json(payload): Json<RelayStatusReq>) -> Json<serde_json::Value> {
-    tracing::info!("IP Host Relay Active: {}", payload.active);
-    Json(serde_json::json!({ "status": "updated" }))
-}
-
-#[derive(Deserialize)]
-struct PrefReq { max_bandwidth_mbps: u32, geo_pref_only: bool }
-async fn update_preferences(Json(payload): Json<PrefReq>) -> Json<serde_json::Value> {
-    tracing::info!("Updated BW: {} Mbps, strict Geo: {}", payload.max_bandwidth_mbps, payload.geo_pref_only);
-    Json(serde_json::json!({ "status": "updated" }))
-}
-
-async fn get_region_blocks(State(state): State<Arc<AppState>>) -> Json<Vec<String>> {
-    let blocks = state.region_blocks.read().await;
-    let list: Vec<String> = blocks.iter().cloned().collect();
-    Json(list)
-}
-
-#[derive(Deserialize)]
-struct RegionBlockReq { country_code: String }
-async fn add_region_block(State(state): State<Arc<AppState>>, Json(payload): Json<RegionBlockReq>) -> Json<serde_json::Value> {
-    tracing::warn!("Global Region Ban Added: {}", payload.country_code);
-    state.region_blocks.write().await.insert(payload.country_code);
-    Json(serde_json::json!({ "status": "banned" }))
-}
-
-async fn remove_region_block(State(state): State<Arc<AppState>>, Path(country_code): Path<String>) -> Json<serde_json::Value> {
-    state.region_blocks.write().await.remove(&country_code);
-    Json(serde_json::json!({ "status": "unbanned" }))
-}
-
-#[derive(Deserialize)]
-struct PortBlockReq { port: u16 }
-async fn add_port_block(State(state): State<Arc<AppState>>, Json(payload): Json<PortBlockReq>) -> Json<serde_json::Value> {
-    state.port_blocks.write().await.insert(payload.port);
-    Json(serde_json::json!({ "status": "banned" }))
-}
-
-async fn remove_port_block(State(state): State<Arc<AppState>>, Path(port): Path<u16>) -> Json<serde_json::Value> {
-    state.port_blocks.write().await.remove(&port);
-    Json(serde_json::json!({ "status": "unbanned" }))
-}
-
-// Legacy register for proxy_node compile check
-#[derive(Deserialize)]
-struct RegisterRequest { role: String, subdomain_req: Option<String> }
-#[derive(Serialize)]
-struct RegisterResponse { status: String, allocated_subdomain: Option<String>, assigned_port: Option<u16> }
-
-async fn legacy_register_node(Json(payload): Json<RegisterRequest>) -> Json<RegisterResponse> {
-    let (subdomain, port) = if payload.role == "service_host" {
-        (payload.subdomain_req.or(Some("duck-main".to_string())), Some(25565))
-    } else {
-        (None, None)
-    };
-    Json(RegisterResponse { status: "registered".to_string(), allocated_subdomain: subdomain, assigned_port: port })
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    serve(listener, app).await?;
+    Ok(())
 }

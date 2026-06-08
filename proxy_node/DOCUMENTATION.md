@@ -1,24 +1,40 @@
-# Proxy Node (Rust CLI) Documentation
+# Proxy Node (Agent) — Documentation
 
-This document outlines the architecture, setup, and usage of the unified Rust daemon used by both standard game hosts and edge node IP providers.
+`proxy_node` is the unified NatForge **agent**: a single Rust binary that runs on the end-user's machine in one of two roles. It authenticates against the control plane, then connects to the data plane.
 
-## Overview
+## Authentication (all modes)
+Resolved in priority order by `auth::obtain_token`:
+1. `--token <JWT>` — use a pre-issued session token (non-interactive).
+2. `--email` + `--password` — log in directly (non-interactive).
+3. Otherwise — the **RFC 8628 device flow**: the CLI prints a code and verification URL; the user approves it from the dashboard; the CLI polls until approved.
 
-The daemon relies heavily on:
-1. **Tokio Async I/O:** `tokio::io::copy_bidirectional` is utilized to establish zero-disk memory buffering. This maps the incoming traffic directly into the user's local instance (e.g., Minecraft on Port 25565).
-2. **WireGuard & Yamux Multiplexing:** `boringtun` establishes a high-speed secure UDP tunnel. `yamux` multiplexes the inner stream to handle thousands of sub-connections mapped to **1 Dedicated TCP** and **1 Dedicated UDP** port on the Global Anycast `core_proxy_backend`.
-3. **STUN Traversal:** Custom UDP encapsulation for direct P2P NAT Traversal, falling back to WireGuard/Yamux over TCP if symmetric blocking occurs.
+## Mode 1 — Service Host
+Expose a local service through a reverse tunnel.
 
-## CLI Commands
-
-### 1. Act as a Service Host
 ```bash
-proxy_node service-host --local-port 25565 --subdomain duck-main --control-plane http://api.thesis.net
+proxy_node service-host \
+  --local-port 25565 \
+  --control-plane http://127.0.0.1:3000 \
+  --tunnel-server 127.0.0.1:4000
 ```
-**Action:** Allocates `duck-main.thesis.net` and automatically pushes traffic down the active tunnel into `127.0.0.1:25565`.
 
-### 2. Act as an IP Edge Node
+Flow: reserve a subdomain (`POST /api/tunnels/request`) → connect to the core control port → length-prefixed handshake with the tunnel token → on `Ok`, print the live public endpoint → run a **yamux server** loop, accepting one inbound stream per public connection and bridging each to `127.0.0.1:<local-port>` with `copy_bidirectional`. Reconnects automatically on disconnect, preserving the subdomain via reservation reuse.
+
+## Mode 2 — IP Host (Edge Node)
+Volunteer this machine as a residential relay.
+
 ```bash
-proxy_node ip-host --max-bandwidth 100 --control-plane http://api.thesis.net
+proxy_node ip-host \
+  --listen-port 30000 \
+  --upstream <core-host>:<public-port> \
+  --max-bandwidth 100 \
+  --control-plane http://127.0.0.1:3000
 ```
-**Action:** Registers the host's public IP as an available relay in the P2P network, capping throughput at 100 Mbps. Uses STUN to verify symmetric/asymmetric NAT types before listing in the Control Plane database.
+
+Flow: register as active (`POST /api/ip_host/status`) → best-effort reflexive public-IP discovery (STUN-like) → run a TCP forwarder from `--listen-port` to `--upstream`, relaying in-memory and accounting bytes. Because egress occurs from this machine, end users reach the service via this residential IP (Scenario B).
+
+## Implementation notes
+- **Multiplexing:** `yamux` over a single outbound TCP connection (one NAT mapping, full concurrency).
+- **Compat:** `tokio_util::compat` bridges Tokio sockets ↔ yamux's futures-io streams.
+- **Zero-disk:** all relaying is `tokio::io::copy_bidirectional` over transient memory buffers.
+- **Future work:** direct UDP hole punching (STUN candidate exchange via the control plane) and WireGuard encapsulation are designed but not yet implemented; the relay/edge tiers are the working data paths today.

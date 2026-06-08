@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["website_backend", "proxy_node", "core_proxy_backend"]
+members = ["natforge-proto", "website_backend", "proxy_node", "core_proxy_backend"]
 
 [workspace.dependencies]
 tokio = { version = "1.34", features = ["full"] }
