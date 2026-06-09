@@ -19,11 +19,8 @@ pub struct Config {
     pub database_url: String,
     /// Redis connection string.
     pub redis_url: String,
-    /// The data-plane node this control plane allocates ports for.
-    pub node_id: String,
-    /// Inclusive public TCP port pool bounds (seeded into port_pool at boot).
-    pub public_port_min: u16,
-    pub public_port_max: u16,
+    /// Path to a MaxMind GeoLite2-Country.mmdb (empty = login geo-blocking off).
+    pub geoip_db: String,
 }
 
 impl Config {
@@ -41,9 +38,7 @@ impl Config {
                 "postgres://natforge:natforge@127.0.0.1:5432/natforge".to_string()
             }),
             redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
-            node_id: env::var("NODE_ID").unwrap_or_else(|_| "edge-1".to_string()),
-            public_port_min: env_u16("PUBLIC_PORT_MIN", 20000),
-            public_port_max: env_u16("PUBLIC_PORT_MAX", 20100),
+            geoip_db: env::var("GEOIP_DB").unwrap_or_default(),
         }
     }
 }
