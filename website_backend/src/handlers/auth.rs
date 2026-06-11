@@ -3,15 +3,33 @@
 
 use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::{extract::State, Json};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::db::connection::SharedState;
-use crate::db::{queries, redis_ops};
+use crate::db::{connection, queries};
 use crate::jwt::{issue_session, AuthUser};
+
+/// Reject the request if the caller's country is on the admin region-block list.
+/// No GeoIP data (or a direct/local connection) means "unknown" → allowed.
+async fn geo_gate(state: &SharedState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
+    let Some(country) = state.geo.country_from_headers(headers) else {
+        return Ok(());
+    };
+    let blocked = queries::region_blocks(&state.db.pg)
+        .await
+        .map_err(db_err)?
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(&country));
+    if blocked {
+        tracing::warn!("rejected auth from geo-blocked country {country}");
+        return Err((StatusCode::FORBIDDEN, format!("access from your region ({country}) is blocked")));
+    }
+    Ok(())
+}
 
 #[derive(Deserialize)]
 pub struct RegisterReq {
@@ -47,11 +65,13 @@ fn db_err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
 
 pub async fn register_user(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(payload): Json<RegisterReq>,
 ) -> Result<Json<AuthResponse>, (StatusCode, String)> {
+    geo_gate(&state, &headers).await?;
     let email = payload.email.trim().to_lowercase();
-    if email.is_empty() || payload.password.len() < 6 {
-        return Err((StatusCode::BAD_REQUEST, "email required and password >= 6 chars".into()));
+    if email.is_empty() || payload.password.len() < 8 {
+        return Err((StatusCode::BAD_REQUEST, "email required and password must be at least 8 characters".into()));
     }
     if queries::user_by_email(&state.db.pg, &email).await.map_err(db_err)?.is_some() {
         return Err((StatusCode::CONFLICT, "email already registered".into()));
@@ -72,8 +92,10 @@ pub struct LoginReq {
 
 pub async fn login_user(
     State(state): State<SharedState>,
+    headers: HeaderMap,
     Json(payload): Json<LoginReq>,
 ) -> Result<Json<AuthResponse>, (StatusCode, String)> {
+    geo_gate(&state, &headers).await?;
     let email = payload.email.trim().to_lowercase();
     let user = queries::user_by_email(&state.db.pg, &email).await.map_err(db_err)?;
     let user = user
@@ -108,7 +130,7 @@ pub async fn device_start(
     const UC: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let device_code = random_code(40, HEX);
     let user_code = format!("{}-{}", random_code(4, UC), random_code(4, UC));
-    redis_ops::devcode_create(&state.db.redis, &user_code, &device_code)
+    connection::devcode_create(&state.db.redis, &user_code, &device_code)
         .await
         .map_err(db_err)?;
     tracing::info!("device authorization started: {user_code}");
@@ -130,7 +152,7 @@ pub async fn device_token(
     State(state): State<SharedState>,
     Json(payload): Json<DeviceTokenReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let rec = redis_ops::devcode_status(&state.db.redis, &payload.device_code)
+    let rec = connection::devcode_status(&state.db.redis, &payload.device_code)
         .await
         .map_err(db_err)?;
     match rec {
@@ -162,7 +184,7 @@ pub async fn device_approve(
     Json(payload): Json<DeviceApproveReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let code = payload.user_code.trim().to_uppercase();
-    let ok = redis_ops::devcode_approve(&state.db.redis, &code, user.user_id)
+    let ok = connection::devcode_approve(&state.db.redis, &code, user.user_id)
         .await
         .map_err(db_err)?;
     if ok {
