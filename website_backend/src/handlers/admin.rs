@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::db::connection::SharedState;
 use crate::db::queries;
 use crate::jwt::AuthUser;
-use crate::models::user::TunnelView;
+use crate::models::TunnelView;
 
 fn require_admin(user: &AuthUser) -> Result<(), (StatusCode, String)> {
     if user.role == "admin" {
@@ -98,7 +98,6 @@ pub async fn remove_port_block(
 pub struct NetworkStats {
     pub total_users: i64,
     pub active_tunnels: i64,
-    pub active_edge_nodes: i64,
     pub total_bytes_relayed: i64,
     pub blocked_regions: i64,
     pub blocked_ports: i64,
@@ -113,7 +112,6 @@ pub async fn network_stats(
     Ok(Json(NetworkStats {
         total_users: s.total_users,
         active_tunnels: s.active_tunnels,
-        active_edge_nodes: s.active_edge_nodes,
         total_bytes_relayed: s.total_bytes_relayed,
         blocked_regions: s.blocked_regions,
         blocked_ports: s.blocked_ports,
@@ -125,5 +123,61 @@ pub async fn all_tunnels(
     user: AuthUser,
 ) -> Result<Json<Vec<TunnelView>>, (StatusCode, String)> {
     require_admin(&user)?;
-    Ok(Json(queries::all_tunnels(&state.db.pg, &state.config.domain).await.map_err(err)?))
+    Ok(Json(queries::all_tunnels(&state.db.pg).await.map_err(err)?))
+}
+
+/// Per-user overview (id, email, role, #tunnels, total traffic, last seen).
+pub async fn list_users(
+    State(state): State<SharedState>,
+    user: AuthUser,
+) -> Result<Json<Vec<crate::models::UserOverview>>, (StatusCode, String)> {
+    require_admin(&user)?;
+    Ok(Json(queries::users_overview(&state.db.pg).await.map_err(err)?))
+}
+
+// --------------------------------------------------------------------------
+// Nodes / regions (each is a data-plane VM that self-registers on boot).
+// --------------------------------------------------------------------------
+
+/// All nodes (active and inactive) for the admin Regions panel.
+pub async fn list_nodes(
+    State(state): State<SharedState>,
+    user: AuthUser,
+) -> Result<Json<Vec<crate::models::Node>>, (StatusCode, String)> {
+    require_admin(&user)?;
+    Ok(Json(queries::list_nodes(&state.db.pg, false).await.map_err(err)?))
+}
+
+#[derive(Deserialize)]
+pub struct UpdateNodeReq {
+    pub name: String,
+    #[serde(default)]
+    pub region: Option<String>,
+    pub active: bool,
+}
+
+/// Admin renames a node, sets its human region label, and enables/disables it.
+pub async fn update_node(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(node_id): Path<String>,
+    Json(p): Json<UpdateNodeReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin(&user)?;
+    let region = p.region.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    queries::update_node(&state.db.pg, &node_id, p.name.trim(), region, p.active)
+        .await
+        .map_err(err)?;
+    Ok(Json(json!({ "status": "updated", "node_id": node_id })))
+}
+
+/// Admin removes a node (also frees its port pool). Tunnels keep their stored host.
+pub async fn delete_node(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(node_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin(&user)?;
+    queries::delete_node(&state.db.pg, &node_id).await.map_err(err)?;
+    Ok(Json(json!({ "status": "deleted", "node_id": node_id })))
 }
