@@ -17,8 +17,11 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use yamux::{ConnectionError, Stream};
 
+use tokio_rustls::TlsAcceptor;
+
 use crate::config::Config;
-use crate::ddos::filter::DdosProtector;
+use crate::ddos::DdosProtector;
+use crate::geo::GeoDb;
 use natforge_proto::RouteMode;
 
 /// Request to the tunnel's yamux driver to open one outbound stream. `route_id`
@@ -39,6 +42,7 @@ pub struct TunnelStats {
 #[derive(Clone)]
 pub struct RouteHandle {
     pub tunnel_id: i64,
+    pub owner_id: i32,
     pub route_id: u16,
     pub mode: RouteMode,
     pub open_tx: mpsc::Sender<OpenStream>,
@@ -71,6 +75,16 @@ pub struct CoreState {
     pub redis: redis::aio::ConnectionManager,
     pub ddos: DdosProtector,
     pub blocked_ports: RwLock<Vec<u16>>,
+    /// Admin-wide blocked countries (ISO alpha-2), refreshed from website policy.
+    pub blocked_regions: RwLock<Vec<String>>,
+    /// Per-tunnel user-chosen blocked countries: tunnel_id -> [CC, ...].
+    pub tunnel_region_blocks: RwLock<HashMap<i64, Vec<String>>>,
+    /// IP → country resolver (optional GeoLite2 database).
+    pub geo: GeoDb,
+    /// TLS acceptor for the agent control connection (self-signed, boot-generated).
+    pub tls: TlsAcceptor,
+    /// SHA-256 fingerprint of our control certificate (agents pin this).
+    pub control_cert_fp: String,
     pub http: reqwest::Client,
 }
 
@@ -78,6 +92,8 @@ impl CoreState {
     pub async fn connect(config: Config) -> anyhow::Result<Arc<Self>> {
         let client = redis::Client::open(config.redis_url.clone())?;
         let redis = redis::aio::ConnectionManager::new(client).await?;
+        let geo = GeoDb::open(&config.geoip_db);
+        let control = crate::tls::generate()?;
         Ok(Arc::new(CoreState {
             config,
             tunnels: RwLock::new(HashMap::new()),
@@ -87,6 +103,11 @@ impl CoreState {
             redis,
             ddos: DdosProtector::default(),
             blocked_ports: RwLock::new(vec![25, 465, 587]),
+            blocked_regions: RwLock::new(Vec::new()),
+            tunnel_region_blocks: RwLock::new(HashMap::new()),
+            geo,
+            tls: control.acceptor,
+            control_cert_fp: control.fingerprint,
             http: reqwest::Client::new(),
         }))
     }
@@ -98,5 +119,20 @@ impl CoreState {
             RouteMode::Https => self.https_routes.read().await.get(subdomain).cloned(),
             RouteMode::Tcp => None,
         }
+    }
+
+    /// Whether a connection from `country` to `tunnel_id` should be refused, by
+    /// either the platform-wide block list or this tunnel's own block list. An
+    /// unknown country (no GeoIP data) is always allowed — we never block blindly.
+    pub async fn is_country_blocked(&self, tunnel_id: i64, country: Option<&str>) -> bool {
+        let Some(cc) = country else { return false };
+        if self.blocked_regions.read().await.iter().any(|c| c == cc) {
+            return true;
+        }
+        self.tunnel_region_blocks
+            .read()
+            .await
+            .get(&tunnel_id)
+            .is_some_and(|list| list.iter().any(|c| c == cc))
     }
 }
