@@ -9,21 +9,20 @@
 
 pub mod mux;
 pub mod shared;
-pub mod wireguard;
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use serde::Serialize;
-use tokio::io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{copy_bidirectional, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{info, warn};
 use yamux::{Config as YamuxConfig, Connection, Mode};
 
-use crate::dns::cloudflare::CloudflareManager;
+use crate::dns::CloudflareManager;
 use crate::jwt::verify_tunnel_token;
 use crate::reporter;
 use crate::state::{ActiveTunnel, CoreState, OpenStream, RouteHandle, TunnelStats};
@@ -31,7 +30,7 @@ use natforge_proto::{encode_preamble, AgentHello, CoreReply, RouteMode, RouteRes
 
 const MAX_FRAME: u32 = 1 << 20;
 
-async fn read_frame(stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
+async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
     let len = stream.read_u32().await?;
     if len > MAX_FRAME {
         anyhow::bail!("handshake frame too large ({len} bytes)");
@@ -41,7 +40,7 @@ async fn read_frame(stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
     Ok(buf)
 }
 
-async fn write_frame(stream: &mut TcpStream, data: &[u8]) -> anyhow::Result<()> {
+async fn write_frame<S: AsyncWrite + Unpin>(stream: &mut S, data: &[u8]) -> anyhow::Result<()> {
     stream.write_u32(data.len() as u32).await?;
     stream.write_all(data).await?;
     stream.flush().await?;
@@ -54,7 +53,7 @@ struct ErrReply<'a> {
     message: String,
 }
 
-async fn reject(socket: &mut TcpStream, message: String) -> anyhow::Result<()> {
+async fn reject<S: AsyncWrite + Unpin>(socket: &mut S, message: String) -> anyhow::Result<()> {
     let body = serde_json::to_vec(&ErrReply { status: "error", message })?;
     let _ = write_frame(socket, &body).await;
     Ok(())
@@ -63,7 +62,7 @@ async fn reject(socket: &mut TcpStream, message: String) -> anyhow::Result<()> {
 pub async fn run_control_plane(state: Arc<CoreState>) -> anyhow::Result<()> {
     let addr = format!("0.0.0.0:{}", state.config.control_port);
     let listener = TcpListener::bind(&addr).await?;
-    info!("agent control plane listening on {addr} (yamux over TCP)");
+    info!("agent control plane listening on {addr} (yamux over TLS)");
     loop {
         let (socket, peer) = match listener.accept().await {
             Ok(v) => v,
@@ -74,7 +73,16 @@ pub async fn run_control_plane(state: Arc<CoreState>) -> anyhow::Result<()> {
         };
         let st = state.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_agent(st, socket).await {
+            // Establish TLS before anything else: the whole yamux session (and every
+            // multiplexed user connection inside it) rides this encrypted channel.
+            let tls = match st.tls.accept(socket).await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("agent {peer} TLS handshake failed: {e}");
+                    return;
+                }
+            };
+            if let Err(e) = handle_agent(st, tls, peer).await {
                 warn!("agent {peer} session ended: {e}");
             }
         });
@@ -89,7 +97,14 @@ struct PlannedRoute {
     public_endpoint: String,
 }
 
-async fn handle_agent(state: Arc<CoreState>, mut socket: TcpStream) -> anyhow::Result<()> {
+async fn handle_agent<S>(
+    state: Arc<CoreState>,
+    mut socket: S,
+    peer: std::net::SocketAddr,
+) -> anyhow::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     // 1. Handshake + token verification.
     let hello: AgentHello = serde_json::from_slice(&read_frame(&mut socket).await?)?;
     if hello.role != "service_host" {
@@ -197,6 +212,7 @@ async fn handle_agent(state: Arc<CoreState>, mut socket: TcpStream) -> anyhow::R
     for p in &planned {
         let handle = RouteHandle {
             tunnel_id,
+            owner_id,
             route_id: p.route_id,
             mode: p.mode,
             open_tx: open_tx.clone(),
@@ -225,10 +241,14 @@ async fn handle_agent(state: Arc<CoreState>, mut socket: TcpStream) -> anyhow::R
                 }
             }
         }
-        CloudflareManager::from_config(cfg)
-            .map_srv_record(&subdomain, &cfg.public_host, p.public_port.unwrap_or(cfg.http_port))
-            .await
-            .ok();
+        // Per-tunnel DNS only for tcp routes: provision an SRV so players can use
+        // <sub>.<domain> instead of host:port. http/https are covered by the wildcard A.
+        if let Some(port) = p.public_port {
+            CloudflareManager::from_config(cfg)
+                .provision_srv(&state.http, &subdomain, &cfg.public_host, port)
+                .await
+                .ok();
+        }
     }
 
     state.tunnels.write().await.insert(
@@ -247,7 +267,7 @@ async fn handle_agent(state: Arc<CoreState>, mut socket: TcpStream) -> anyhow::R
     );
 
     // 6. Notify website + Redis mirror + periodic bandwidth reporting.
-    reporter::tunnel_up(&state, tunnel_id, &subdomain).await;
+    reporter::tunnel_up(&state, tunnel_id, &subdomain, &peer.ip().to_string()).await;
     reporter::redis_mirror_up(&state, tunnel_id, &subdomain, has_http, has_https, &public_ports).await;
 
     let report_state = state.clone();
@@ -277,7 +297,7 @@ async fn handle_agent(state: Arc<CoreState>, mut socket: TcpStream) -> anyhow::R
 
 /// Remove this tunnel's registry entries (only if still owned by this tunnel_id)
 /// and abort its tcp listeners.
-async fn teardown(state: &Arc<CoreState>, tunnel_id: i64, subdomain: &str, ports: &[u16]) {
+pub(crate) async fn teardown(state: &Arc<CoreState>, tunnel_id: i64, subdomain: &str, ports: &[u16]) {
     if let Some(t) = state.tunnels.write().await.remove(subdomain) {
         for jh in t.listener_handles {
             jh.abort();
@@ -303,6 +323,13 @@ async fn teardown(state: &Arc<CoreState>, tunnel_id: i64, subdomain: &str, ports
             }
         }
     }
+    // Remove the per-tunnel SRV record(s) if this tunnel had any tcp routes.
+    if !ports.is_empty() {
+        CloudflareManager::from_config(&state.config)
+            .remove_srv(&state.http, subdomain, &state.config.public_host)
+            .await
+            .ok();
+    }
 }
 
 /// Accept loop for a dedicated tcp route's public port.
@@ -316,15 +343,30 @@ async fn tcp_listener_loop(state: Arc<CoreState>, listener: TcpListener, handle:
             continue;
         }
         let h = handle.clone();
+        let st = state.clone();
         tokio::spawn(async move {
-            bridge_public_connection(inbound, peer, h).await;
+            bridge_public_connection(st, inbound, peer, h).await;
         });
     }
 }
 
 /// Bridge a raw-TCP public connection to a fresh yamux stream (preamble carries the
-/// route id and peer, with no replay bytes).
-async fn bridge_public_connection(mut inbound: TcpStream, peer: std::net::SocketAddr, handle: RouteHandle) {
+/// route id and peer, with no replay bytes). Geo-policy is enforced first, and the
+/// connection is recorded in the per-tunnel log on close.
+async fn bridge_public_connection(
+    state: Arc<CoreState>,
+    mut inbound: TcpStream,
+    peer: std::net::SocketAddr,
+    handle: RouteHandle,
+) {
+    let peer_ip = peer.ip().to_string();
+    let country = state.geo.country(peer.ip());
+    // Geo-policy: drop (and log) connections from blocked countries.
+    if state.is_country_blocked(handle.tunnel_id, country.as_deref()).await {
+        reporter::report_conn_log(&state, &handle, &peer_ip, country.as_deref(), 0, 0, 0, true).await;
+        return;
+    }
+
     let (reply_tx, reply_rx) = oneshot::channel();
     if handle.open_tx.send(OpenStream { route_id: handle.route_id, reply: reply_tx }).await.is_err() {
         return;
@@ -338,10 +380,16 @@ async fn bridge_public_connection(mut inbound: TcpStream, peer: std::net::Socket
     if outbound.write_all(&preamble).await.is_err() {
         return;
     }
+    let start = std::time::Instant::now();
     match copy_bidirectional(&mut inbound, &mut outbound).await {
         Ok((to_agent, from_agent)) => {
             handle.stats.bytes_in.fetch_add(to_agent, Ordering::Relaxed);
             handle.stats.bytes_out.fetch_add(from_agent, Ordering::Relaxed);
+            reporter::report_conn_log(
+                &state, &handle, &peer_ip, country.as_deref(),
+                to_agent, from_agent, start.elapsed().as_millis(), false,
+            )
+            .await;
         }
         Err(e) => warn!("tcp relay closed: {e}"),
     }
