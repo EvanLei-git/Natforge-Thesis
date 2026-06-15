@@ -191,7 +191,11 @@ fn parse_sni(b: &[u8]) -> Sni {
     }
     let ext_total = u16::from_be_bytes([body[p], body[p + 1]]) as usize;
     p += 2;
-    let ext_end = (p + ext_total).min(body.len());
+    // The claimed extension block must actually be present; if not, read more.
+    if p + ext_total > body.len() {
+        return Sni::NeedMore;
+    }
+    let ext_end = p + ext_total;
     while p + 4 <= ext_end {
         let etype = u16::from_be_bytes([body[p], body[p + 1]]);
         let elen = u16::from_be_bytes([body[p + 2], body[p + 3]]) as usize;
@@ -243,7 +247,21 @@ async fn route_and_splice(
         }
     };
 
-    if !state.ddos.analyze_connection(&peer.ip().to_string()).await {
+    let peer_ip = peer.ip().to_string();
+    if !state.ddos.analyze_connection(&peer_ip).await {
+        return;
+    }
+
+    let country = state.geo.country(peer.ip());
+    // Geo-policy: drop (and log) connections from blocked countries. Under TLS we
+    // cannot send a friendly error, so we simply close — matching the L4 model.
+    if state.is_country_blocked(handle.tunnel_id, country.as_deref()).await {
+        if mode == RouteMode::Http {
+            let _ = inbound
+                .write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 16\r\n\r\nregion is blocked")
+                .await;
+        }
+        crate::reporter::report_conn_log(&state, &handle, &peer_ip, country.as_deref(), 0, 0, 0, true).await;
         return;
     }
 
@@ -260,10 +278,19 @@ async fn route_and_splice(
     if outbound.write_all(&preamble).await.is_err() {
         return;
     }
+    let start = std::time::Instant::now();
     match copy_bidirectional(&mut inbound, &mut outbound).await {
         Ok((to_agent, from_agent)) => {
-            handle.stats.bytes_in.fetch_add(to_agent + peeked.len() as u64, Ordering::Relaxed);
+            // `to_agent` already excludes the peeked bytes (they were consumed before
+            // copy_bidirectional); count them once here, not twice.
+            let bytes_in = to_agent + peeked.len() as u64;
+            handle.stats.bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
             handle.stats.bytes_out.fetch_add(from_agent, Ordering::Relaxed);
+            crate::reporter::report_conn_log(
+                &state, &handle, &peer_ip, country.as_deref(),
+                bytes_in, from_agent, start.elapsed().as_millis(), false,
+            )
+            .await;
         }
         Err(e) => warn!("relay closed: {e}"),
     }
