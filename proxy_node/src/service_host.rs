@@ -13,15 +13,35 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
-use tokio::io::{copy_bidirectional, AsyncWriteExt};
+use tokio::io::{copy_bidirectional, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{error, info, warn};
 use yamux::{Config as YamuxConfig, Connection, Mode};
 
-use crate::protocol::{
-    read_frame, read_preamble, write_frame, AgentHello, AgentRouteBinding, CoreReply, RouteMode,
-};
+// Handshake + preamble wire contract lives in the shared `natforge-proto` crate so
+// the agent and core can never drift; the agent only *reads* preambles (the core
+// writes them) and exchanges two length-prefixed JSON frames before the yamux upgrade.
+use natforge_proto::{read_preamble, AgentHello, AgentRouteBinding, CoreReply, RouteMode};
+
+const MAX_FRAME: u32 = 1 << 20;
+
+async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
+    let len = stream.read_u32().await?;
+    if len > MAX_FRAME {
+        anyhow::bail!("frame too large ({len} bytes)");
+    }
+    let mut buf = vec![0u8; len as usize];
+    stream.read_exact(&mut buf).await?;
+    Ok(buf)
+}
+
+async fn write_frame<S: AsyncWrite + Unpin>(stream: &mut S, data: &[u8]) -> anyhow::Result<()> {
+    stream.write_u32(data.len() as u32).await?;
+    stream.write_all(data).await?;
+    stream.flush().await?;
+    Ok(())
+}
 
 /// A route the user asked this agent to expose.
 #[derive(Debug, Clone)]
@@ -39,6 +59,9 @@ struct RequestedRoute {
 #[derive(Serialize)]
 struct RequestTunnelReq {
     routes: Vec<RequestedRoute>,
+    /// Optional region/node id the user picked (`--region`); server default otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node_id: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -51,20 +74,33 @@ struct ReservedRoute {
 }
 
 #[derive(Deserialize, Clone)]
+#[allow(dead_code)] // node_id is part of the wire shape, surfaced for diagnostics
 struct Reservation {
     tunnel_id: i64,
     subdomain: String,
     full_host: String,
     tunnel_token: String,
     routes: Vec<ReservedRoute>,
+    /// host:port of the node hosting this tunnel — where the agent connects.
+    control_endpoint: String,
+    region: Option<String>,
+    node_id: String,
+    /// SHA-256 fingerprint of the node's TLS control cert, pinned by the agent.
+    control_cert_fingerprint: Option<String>,
 }
 
-async fn reserve(control_plane: &str, session_token: &str, specs: &[RouteSpec]) -> Result<Reservation> {
+async fn reserve(
+    control_plane: &str,
+    session_token: &str,
+    specs: &[RouteSpec],
+    node_id: Option<&str>,
+) -> Result<Reservation> {
     let body = RequestTunnelReq {
         routes: specs
             .iter()
             .map(|s| RequestedRoute { mode: s.mode, local_port: s.local_port })
             .collect(),
+        node_id: node_id.map(|s| s.to_string()),
     };
     let client = reqwest::Client::new();
     let resp = client
@@ -83,22 +119,29 @@ async fn reserve(control_plane: &str, session_token: &str, specs: &[RouteSpec]) 
 
 pub async fn run(
     control_plane: &str,
-    tunnel_server: &str,
+    tunnel_server: Option<&str>,
+    region: Option<&str>,
     specs: Vec<RouteSpec>,
     session_token: &str,
 ) -> Result<()> {
-    let mut reservation = reserve(control_plane, session_token, &specs).await?;
+    let mut reservation = reserve(control_plane, session_token, &specs, region).await?;
     info!(
-        "reserved tunnel {} '{}' ({}) with {} route(s)",
-        reservation.tunnel_id, reservation.subdomain, reservation.full_host, reservation.routes.len()
+        "reserved tunnel {} '{}' ({}) on region '{}' with {} route(s)",
+        reservation.tunnel_id,
+        reservation.subdomain,
+        reservation.full_host,
+        reservation.region.as_deref().unwrap_or(&reservation.node_id),
+        reservation.routes.len()
     );
 
     loop {
-        match connect_and_serve(tunnel_server, &reservation).await {
+        // Connect to the node hosting the tunnel; --tunnel-server overrides (dev).
+        let target = tunnel_server.unwrap_or(reservation.control_endpoint.as_str()).to_string();
+        match connect_and_serve(&target, &reservation).await {
             Ok(()) => warn!("tunnel session ended; reconnecting in 3s…"),
             Err(e) => {
                 warn!("tunnel error ({e}); re-reserving and reconnecting in 3s…");
-                if let Ok(r) = reserve(control_plane, session_token, &specs).await {
+                if let Ok(r) = reserve(control_plane, session_token, &specs, region).await {
                     reservation = r;
                 }
             }
@@ -108,8 +151,13 @@ pub async fn run(
 }
 
 async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Result<()> {
-    info!("connecting to core proxy control plane at {tunnel_server}");
-    let mut socket = TcpStream::connect(tunnel_server).await?;
+    info!("connecting to core proxy control plane at {tunnel_server} (TLS)");
+    let tcp = TcpStream::connect(tunnel_server).await?;
+    let fingerprint = reservation
+        .control_cert_fingerprint
+        .as_deref()
+        .ok_or_else(|| anyhow!("reservation did not include a control certificate fingerprint"))?;
+    let mut socket = crate::tls::connect(tcp, fingerprint).await?;
 
     // route_id -> local_port, learned from the reservation.
     let routes: Arc<HashMap<u16, u16>> = Arc::new(

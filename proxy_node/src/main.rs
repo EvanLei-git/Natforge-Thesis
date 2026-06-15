@@ -1,23 +1,21 @@
-//! NatForge — Unified Proxy Node (CLI agent).
+//! NatForge — Proxy Node (CLI agent).
 //!
 //!   * `service-host` — expose one or more local services through a reverse tunnel.
-//!   * `ip-host`      — volunteer this machine as a residential relay (edge node).
 
 mod auth;
-mod ip_host;
-mod protocol;
 mod service_host;
+mod tls;
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use tracing::error;
 
-use crate::protocol::RouteMode;
+use natforge_proto::RouteMode;
 use crate::service_host::RouteSpec;
 
 #[derive(Parser)]
 #[command(name = "proxy_node")]
-#[command(about = "NatForge data-plane agent (Service Host / IP Host)", long_about = None)]
+#[command(about = "NatForge data-plane agent (Service Host)", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     mode: Mode,
@@ -40,27 +38,17 @@ enum Mode {
         #[arg(short, long, default_value = "http://127.0.0.1:3000")]
         control_plane: String,
 
-        /// Core proxy control port (yamux over TCP).
-        #[arg(short, long, default_value = "127.0.0.1:4000")]
-        tunnel_server: String,
+        /// Region/node id to host the tunnel on (see the dashboard region list).
+        /// Omit to use the platform's default region.
+        #[arg(long)]
+        region: Option<String>,
 
-        #[arg(long)]
-        token: Option<String>,
-        #[arg(long)]
-        email: Option<String>,
-        #[arg(long)]
-        password: Option<String>,
-    },
-    /// Run as a volunteer residential relay (edge node).
-    IpHost {
-        #[arg(short, long, default_value_t = 30000)]
-        listen_port: u16,
+        /// Override the core proxy control address (host:port). Normally learned
+        /// from the reservation; set this only for local dev against a node whose
+        /// advertised control endpoint isn't reachable (e.g. `127.0.0.1:4000`).
         #[arg(short, long)]
-        upstream: String,
-        #[arg(short, long, default_value_t = 100)]
-        max_bandwidth: u32,
-        #[arg(short, long, default_value = "http://127.0.0.1:3000")]
-        control_plane: String,
+        tunnel_server: Option<String>,
+
         #[arg(long)]
         token: Option<String>,
         #[arg(long)]
@@ -109,6 +97,7 @@ async fn main() -> Result<()> {
             routes,
             local_port,
             control_plane,
+            region,
             tunnel_server,
             token,
             email,
@@ -116,24 +105,16 @@ async fn main() -> Result<()> {
         } => {
             let specs = parse_routes(routes, *local_port)?;
             let session = auth::obtain_token(control_plane, token, email, password).await?;
-            if let Err(e) = service_host::run(control_plane, tunnel_server, specs, &session).await {
-                error!("service host stopped: {e}");
-            }
-        }
-        Mode::IpHost {
-            listen_port,
-            upstream,
-            max_bandwidth,
-            control_plane,
-            token,
-            email,
-            password,
-        } => {
-            let session = auth::obtain_token(control_plane, token, email, password).await?;
-            if let Err(e) =
-                ip_host::run(control_plane, *listen_port, upstream, *max_bandwidth, &session).await
+            if let Err(e) = service_host::run(
+                control_plane,
+                tunnel_server.as_deref(),
+                region.as_deref(),
+                specs,
+                &session,
+            )
+            .await
             {
-                error!("ip host stopped: {e}");
+                error!("service host stopped: {e}");
             }
         }
     }
