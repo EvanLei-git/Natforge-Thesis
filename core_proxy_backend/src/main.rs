@@ -8,9 +8,11 @@ pub mod api;
 pub mod config;
 pub mod ddos;
 pub mod dns;
+pub mod geo;
 pub mod jwt;
 pub mod reporter;
 pub mod state;
+pub mod tls;
 pub mod tunnel;
 
 use std::time::Duration;
@@ -27,6 +29,9 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let config = Config::from_env();
+    if config.jwt_secret == "natforge-dev-secret-change-me" || config.internal_secret == "natforge-internal-dev-secret" {
+        tracing::warn!("SECURITY: using built-in DEV secrets — set JWT_SECRET and INTERNAL_SECRET to strong random values before any non-local deployment (tunnel tokens are forgeable otherwise).");
+    }
     info!("NatForge Core Proxy starting (node '{}')", config.node_id);
     info!(
         "public host '{}', shared http :{} / https :{}, control :{}",
@@ -35,7 +40,22 @@ async fn main() -> anyhow::Result<()> {
 
     let state = CoreState::connect(config.clone()).await?;
 
-    // Initial policy pull + periodic refresh.
+    // Announce this node to the control plane (upserts the node row + seeds its
+    // TCP port pool) before serving traffic, retrying until the website accepts it
+    // so the very first tunnel reservation can already see this region. Re-announced
+    // on the policy tick so a later website restart relearns us.
+    for attempt in 1..=30u32 {
+        if reporter::node_register(&state).await {
+            info!("registered node '{}' with the control plane", config.node_id);
+            break;
+        }
+        if attempt == 1 {
+            info!("waiting for the control plane to accept node registration…");
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    // Initial policy pull + periodic refresh (also re-registers this node).
     reporter::refresh_policy(&state).await;
     {
         let st = state.clone();
@@ -43,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
             let mut ticker = tokio::time::interval(Duration::from_secs(30));
             loop {
                 ticker.tick().await;
+                reporter::node_register(&st).await;
                 reporter::refresh_policy(&st).await;
             }
         });
@@ -76,9 +97,9 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    info!("initialising simulated eBPF volumetric DDoS heuristics");
+    info!("userspace connection-rate DDoS filter active");
 
-    let app = api::routes::core_routes(state.clone());
+    let app = api::core_routes(state.clone());
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.internal_api_port));
     info!("core internal API listening on {addr}");
     let listener = tokio::net::TcpListener::bind(addr).await?;
