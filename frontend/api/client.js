@@ -54,24 +54,35 @@ class NatForgeAPI {
 
     // --- Service-host tunnels ---
     getTunnels()          { return this._req('GET', '/tunnels'); }
-    // routes: [{ mode: 'http'|'https'|'tcp', local_port: <number> }, ...]
-    requestTunnel(routes) { return this._req('POST', '/tunnels/request', { routes }); }
+    // routes: [{ mode, local_port, label? }, ...]; subdomain + nodeId optional
+    requestTunnel(routes, subdomain, nodeId) {
+        return this._req('POST', '/tunnels/request', {
+            routes,
+            subdomain: subdomain || null,
+            node_id: nodeId || null,
+        });
+    }
     stopTunnel(tunnelId)  { return this._req('DELETE', `/tunnels/${encodeURIComponent(tunnelId)}`); }
-
-    // --- IP host / edge node ---
-    getIpHostStatus()         { return this._req('GET', '/ip_host/status'); }
-    setRelayStatus(active)    { return this._req('POST', '/ip_host/status', { active }); }
-    updatePrefs(mbps, geo)    { return this._req('PUT', '/user/preferences', { max_bandwidth_mbps: mbps, geo_pref_only: geo }); }
+    getRegions()          { return this._req('GET', '/regions'); }
+    getTunnelBandwidth(id){ return this._req('GET', `/tunnels/${encodeURIComponent(id)}/bandwidth`); }
+    getTunnelLogs(id)     { return this._req('GET', `/tunnels/${encodeURIComponent(id)}/logs`); }
+    getTunnelRegionBlocks(id)       { return this._req('GET', `/tunnels/${encodeURIComponent(id)}/region_blocks`); }
+    setTunnelRegionBlocks(id, codes){ return this._req('PUT', `/tunnels/${encodeURIComponent(id)}/region_blocks`, { country_codes: codes }); }
 
     // --- Admin ---
     getStats()                { return this._req('GET', '/admin/stats'); }
     getAllTunnels()           { return this._req('GET', '/admin/tunnels'); }
+    getUsers()                { return this._req('GET', '/admin/users'); }
     getRegionBlocks()         { return this._req('GET', '/admin/region_blocks'); }
     addRegionBlock(cc)        { return this._req('POST', '/admin/region_blocks', { country_code: cc }); }
     removeRegionBlock(cc)     { return this._req('DELETE', `/admin/region_blocks/${cc}`); }
     getPortBlocks()           { return this._req('GET', '/admin/port_blocks'); }
     addPortBlock(port)        { return this._req('POST', '/admin/port_blocks', { port }); }
     removePortBlock(port)     { return this._req('DELETE', `/admin/port_blocks/${port}`); }
+    // --- Admin: nodes / regions ---
+    getNodes()                { return this._req('GET', '/admin/nodes'); }
+    updateNode(id, body)      { return this._req('PATCH', `/admin/nodes/${encodeURIComponent(id)}`, body); }
+    deleteNode(id)            { return this._req('DELETE', `/admin/nodes/${encodeURIComponent(id)}`); }
 }
 
 window.API = new NatForgeAPI();
