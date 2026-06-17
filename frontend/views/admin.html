@@ -4,84 +4,88 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NatForge — Admin</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="icon" href="../assets/img/natforge_flake.ico">
     <link href="../assets/css/style.css" rel="stylesheet">
 </head>
 <body>
-    <div class="d-flex">
-        <div class="sidebar p-3 d-flex flex-column" style="width: 250px;">
-            <h4 class="mb-4 d-flex align-items-center text-warning"><span class="me-2">🛡️</span> Admin</h4>
-            <ul class="nav flex-column mb-auto">
-                <li class="nav-item"><a href="dashboard.html" class="nav-link">🏠 Service Host</a></li>
-                <li class="nav-item"><a href="ipbase.html" class="nav-link">⚡ IP Host (Edge Node)</a></li>
-                <li class="nav-item"><a href="admin.html" class="nav-link active text-warning">🛡️ Admin Panel</a></li>
-            </ul>
-            <hr>
-            <a href="#" onclick="logout()" class="nav-link text-danger">🚪 Logout</a>
-        </div>
-
-        <div class="flex-grow-1 p-4 bg-light">
-            <h2 class="mb-3">Network Administration</h2>
-
-            <div class="row mb-4" id="statCards"></div>
-
-            <!-- Region blocking -->
-            <div class="card shadow-sm mb-4 border-danger">
-                <div class="card-header bg-danger text-white"><h5 class="mb-0">Geographic / Region Blocking</h5></div>
-                <div class="card-body">
-                    <p class="text-muted small">Any agent or end-user IP geolocated to a blocked country is rejected by the control plane.</p>
-                    <div class="row">
-                        <div class="col-md-7">
-                            <div class="region-map-placeholder mb-3">[ Vector map placeholder — click a country to block ]</div>
-                        </div>
-                        <div class="col-md-5">
-                            <h6 class="fw-bold">Active Region Blocks</h6>
-                            <ul class="list-group mb-3" id="regionList"></ul>
-                            <form class="d-flex" id="regionForm">
-                                <select class="form-select me-2" id="regionSelect" required>
-                                    <option value="" selected disabled>Select country…</option>
-                                    <option value="RU">Russia (RU)</option>
-                                    <option value="CN">China (CN)</option>
-                                    <option value="KP">North Korea (KP)</option>
-                                    <option value="IR">Iran (IR)</option>
-                                    <option value="BY">Belarus (BY)</option>
-                                    <option value="US">United States (US)</option>
-                                    <option value="GB">United Kingdom (GB)</option>
-                                </select>
-                                <button type="submit" class="btn btn-danger">Block</button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="brand">
+                <img src="../assets/img/natforge_flake.png" alt="">
+                <span class="name">NatForge</span>
             </div>
+            <nav class="nav">
+                <a href="dashboard.html" class="nav-link"><span data-icon="service"></span> Service Host</a>
+                <a href="admin.html" class="nav-link active"><span data-icon="admin"></span> Admin</a>
+                <a href="users.html" class="nav-link"><span data-icon="users"></span> Users</a>
+            </nav>
+            <div class="nav-spacer"></div>
+            <a href="#" onclick="logout()" class="nav-link danger"><span data-icon="logout"></span> Sign out</a>
+        </aside>
 
-            <!-- Port bans -->
-            <div class="card shadow-sm mb-4">
-                <div class="card-header bg-white"><h5 class="mb-0">Globally Blocked Ports</h5></div>
+        <main class="content">
+            <h2 class="page-title">Network administration</h2>
+            <p class="page-sub">Monitor the network and enforce abuse controls. Blocked ports and regions are applied by the control plane and propagated to the data plane.</p>
+
+            <div class="stat-grid" id="statCards"></div>
+
+            <div class="card">
+                <div class="card-head"><h5>Geographic / region blocking</h5></div>
                 <div class="card-body">
-                    <p class="text-muted small">Prevent tunneling of abused ports (e.g. SMTP 25/465/587) to protect edge nodes.</p>
-                    <div class="d-flex gap-2 flex-wrap mb-3" id="portList"></div>
-                    <form class="d-flex" style="max-width: 320px;" id="portForm">
-                        <input type="number" min="1" max="65535" id="portInput" class="form-control me-2" placeholder="Port number" required>
-                        <button type="submit" class="btn btn-outline-dark">Add</button>
+                    <p class="muted small">Connections whose source IP geolocates (MaxMind GeoLite2) to a blocked country are refused platform-wide: the control plane rejects login/registration, and the data plane drops public tunnel connections. Tunnel owners can add their own per-tunnel country blocks on top of this.</p>
+                    <label class="lbl">Active region blocks</label>
+                    <div id="regionList" class="mt"></div>
+                    <form class="row-inline mt" id="regionForm" style="max-width:420px">
+                        <select class="input" id="regionSelect" required>
+                            <option value="" selected disabled>Select country…</option>
+                            <option value="RU">Russia (RU)</option>
+                            <option value="CN">China (CN)</option>
+                            <option value="KP">North Korea (KP)</option>
+                            <option value="IR">Iran (IR)</option>
+                            <option value="BY">Belarus (BY)</option>
+                            <option value="US">United States (US)</option>
+                            <option value="GB">United Kingdom (GB)</option>
+                        </select>
+                        <button type="submit" class="btn btn-danger"><span data-icon="ban"></span> Block</button>
                     </form>
                 </div>
             </div>
 
-            <!-- All tunnels -->
-            <div class="card shadow-sm">
-                <div class="card-header bg-white"><h5 class="mb-0">All Active Tunnels</h5></div>
-                <div class="card-body p-0">
-                    <table class="table table-hover mb-0 align-middle">
-                        <thead class="table-light"><tr><th>Tunnel</th><th>Status</th><th>Routes</th><th>Traffic</th></tr></thead>
-                        <tbody id="allTunnels"><tr><td colspan="4" class="text-center text-muted py-3">Loading…</td></tr></tbody>
+            <div class="card">
+                <div class="card-head"><h5>Regions (data-plane nodes)</h5></div>
+                <div class="card-body">
+                    <p class="muted small">Each region is a data-plane VM running <code>core_proxy_backend</code>. A node self-registers on boot with its own wildcard host + public TCP port pool; rename it, set a human region label, toggle whether users may place new tunnels there, or remove a decommissioned node. To add a region (e.g. a VM in Bulgaria), deploy a core there with a unique <code>NODE_ID</code>, a <code>PUBLIC_HOST</code> like <code>bg.natforge.com</code>, a reachable <code>CONTROL_ENDPOINT</code> / <code>INTERNAL_URL</code>, and point <code>WEBSITE_URL</code> here — it appears below automatically.</p>
+                    <div class="card-body flush"><table class="table">
+                        <thead><tr><th>Node</th><th>Region</th><th>Public host</th><th>Last seen</th><th>Available</th><th></th></tr></thead>
+                        <tbody id="nodeRows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+                    </table></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head"><h5>Globally blocked ports</h5></div>
+                <div class="card-body">
+                    <p class="muted small">Prevent tunneling of abused ports (e.g. SMTP 25 / 465 / 587) across the network.</p>
+                    <div class="flex gap" id="portList" style="flex-wrap:wrap"></div>
+                    <form class="row-inline mt" id="portForm" style="max-width:320px">
+                        <input type="number" min="1" max="65535" id="portInput" class="input" placeholder="Port number" required>
+                        <button type="submit" class="btn btn-secondary"><span data-icon="plus"></span> Add</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head"><h5>All active tunnels</h5></div>
+                <div class="card-body flush">
+                    <table class="table">
+                        <thead><tr><th>Tunnel</th><th>Status</th><th>Routes</th><th>Traffic</th></tr></thead>
+                        <tbody id="allTunnels"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
                     </table>
                 </div>
             </div>
-        </div>
+        </main>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="../api/client.js"></script>
     <script src="../assets/js/app.js"></script>
     <script>
@@ -89,50 +93,85 @@
 
         async function refresh() {
             try {
-                const [stats, regions, ports, tunnels] = await Promise.all([
-                    API.getStats(), API.getRegionBlocks(), API.getPortBlocks(), API.getAllTunnels()
+                const [stats, regions, ports, tunnels, nodes] = await Promise.all([
+                    API.getStats(), API.getRegionBlocks(), API.getPortBlocks(), API.getAllTunnels(), API.getNodes()
                 ]);
-                renderStats(stats); renderRegions(regions); renderPorts(ports); renderTunnels(tunnels);
+                renderStats(stats); renderRegions(regions); renderPorts(ports); renderTunnels(tunnels); renderNodes(nodes);
             } catch (err) { toast(err.message, 'danger'); }
         }
 
-        function card(label, value, color) {
-            return `<div class="col-md-2 col-sm-4 mb-2"><div class="card p-3 shadow-sm border-0 border-start border-${color} border-4">
-                <div class="text-muted small">${label}</div><h4 class="mb-0">${value}</h4></div></div>`;
+        function stat(label, value, cls, ic) {
+            return `<div class="stat ${cls || ''}"><div class="flex between"><div class="label">${label}</div>${nfIcon(ic)}</div><div class="value">${value}</div></div>`;
         }
         function renderStats(s) {
             document.getElementById('statCards').innerHTML =
-                card('Users', s.total_users, 'primary') +
-                card('Tunnels', s.active_tunnels, 'success') +
-                card('Edge Nodes', s.active_edge_nodes, 'warning') +
-                card('Relayed', fmtBytes(s.total_bytes_relayed), 'info') +
-                card('Regions', s.blocked_regions, 'danger') +
-                card('Ports', s.blocked_ports, 'dark');
+                stat('Users', s.total_users, '', 'users') +
+                stat('Active tunnels', s.active_tunnels, 'green', 'service') +
+                stat('Traffic', fmtBytes(s.total_bytes_relayed), '', 'activity') +
+                stat('Regions blocked', s.blocked_regions, 'red', 'globe') +
+                stat('Ports blocked', s.blocked_ports, '', 'ban');
         }
         function renderRegions(list) {
             document.getElementById('regionList').innerHTML = list.length ? list.map(cc =>
-                `<li class="list-group-item d-flex justify-content-between align-items-center">
-                    <span><span class="badge bg-secondary me-2">${cc}</span></span>
-                    <button class="btn btn-sm btn-outline-danger" onclick="unblockRegion('${cc}')">Unban</button></li>`
-            ).join('') : '<li class="list-group-item text-muted">None</li>';
+                `<div class="flex between" style="padding:8px 0; border-bottom:1px solid var(--border)">
+                    <span class="badge tag">${cc}</span>
+                    <button class="btn btn-danger btn-sm" onclick="unblockRegion('${cc}')">Unban</button></div>`
+            ).join('') : '<div class="faint small">None</div>';
         }
         function renderPorts(list) {
             document.getElementById('portList').innerHTML = list.length ? list.map(p =>
-                `<span class="badge bg-dark fs-6 p-2">Port ${p}
-                    <button class="btn-close btn-close-white ms-2" style="font-size:.5rem" onclick="unblockPort(${p})"></button></span>`
-            ).join('') : '<span class="text-muted">None</span>';
+                `<span class="badge tag" style="font-size:13px; padding:6px 10px">Port ${p}
+                    <button class="x-btn" style="padding:0 0 0 4px" onclick="unblockPort(${p})">${nfIcon('close')}</button></span>`
+            ).join('') : '<span class="faint small">None</span>';
         }
+        function routeBadges(t) { return t.routes.map(r => `<span class="badge ${r.mode}">${r.mode}:${r.local_port}</span>`).join(' '); }
         function renderTunnels(list) {
             document.getElementById('allTunnels').innerHTML = list.length ? list.map(t =>
-                `<tr><td>${t.full_host}<div class="text-muted small">#${t.tunnel_id}</div></td>
-                 <td><span class="badge bg-${t.status==='online'?'success':'secondary'}">${t.status}</span></td>
-                 <td class="small">${t.routes.map(r => r.mode + ':' + r.local_port).join(', ')}</td>
-                 <td class="small text-muted">↓${fmtBytes(t.bytes_in)} / ↑${fmtBytes(t.bytes_out)}</td></tr>`
-            ).join('') : '<tr><td colspan="4" class="text-center text-muted py-3">No active tunnels</td></tr>';
+                `<tr><td><div class="host">${t.full_host}</div><div class="faint small">#${t.tunnel_id} &middot; agent ${t.agent_ip || '—'}</div></td>
+                 <td><span class="badge ${t.status}">${t.status.replace('_',' ')}</span></td>
+                 <td>${routeBadges(t)}</td>
+                 <td class="faint small">${fmtBytes(t.bytes_in)} / ${fmtBytes(t.bytes_out)}</td></tr>`
+            ).join('') : '<tr><td colspan="4" class="empty">No active tunnels</td></tr>';
         }
 
-        async function unblockRegion(cc) { try { await API.removeRegionBlock(cc); refresh(); } catch (e) { toast(e.message,'danger'); } }
-        async function unblockPort(p)   { try { await API.removePortBlock(p); refresh(); } catch (e) { toast(e.message,'danger'); } }
+        function renderNodes(list) {
+            document.getElementById('nodeRows').innerHTML = list.length ? list.map(n => {
+                const seen = n.last_seen ? fmtAgo(n.last_seen) : '<span class="faint small">never</span>';
+                const avail = n.active ? '<span class="badge online">yes</span>' : '<span class="badge offline">no</span>';
+                return `<tr>
+                    <td><div class="host">${escapeHtml(n.name)}</div><div class="faint small">${escapeHtml(n.node_id)}</div></td>
+                    <td>${n.region ? `<span class="badge tag">${escapeHtml(n.region)}</span>` : '<span class="faint small">—</span>'}</td>
+                    <td><span class="endpoint">${escapeHtml(n.public_host)}</span><div class="faint small">ctrl ${escapeHtml(n.control_endpoint)}</div></td>
+                    <td class="faint small">${seen}</td>
+                    <td>${avail}</td>
+                    <td class="row-inline" style="gap:6px">
+                        <button class="btn btn-secondary btn-sm" onclick='editNode(${JSON.stringify(n.node_id)}, ${JSON.stringify(n.name)}, ${JSON.stringify(n.region || "")}, ${n.active})'>Edit</button>
+                        <button class="btn btn-secondary btn-sm" onclick='toggleNode(${JSON.stringify(n.node_id)}, ${JSON.stringify(n.name)}, ${JSON.stringify(n.region || "")}, ${n.active})'>${n.active ? 'Disable' : 'Enable'}</button>
+                        <button class="btn btn-danger btn-sm" onclick='removeNode(${JSON.stringify(n.node_id)})'>${nfIcon('close')}</button>
+                    </td></tr>`;
+            }).join('') : '<tr><td colspan="6" class="empty">No nodes have registered yet. Start a core_proxy_backend pointed at this control plane.</td></tr>';
+        }
+
+        async function editNode(id, name, region, active) {
+            const newName = prompt('Node display name:', name);
+            if (newName === null) return;
+            const newRegion = prompt('Region label (e.g. Germany, Bulgaria) — blank for none:', region);
+            if (newRegion === null) return;
+            try { await API.updateNode(id, { name: newName.trim() || name, region: newRegion.trim() || null, active }); refresh(); }
+            catch (e) { toast(e.message, 'danger'); }
+        }
+        async function toggleNode(id, name, region, active) {
+            try { await API.updateNode(id, { name, region: region || null, active: !active }); refresh(); }
+            catch (e) { toast(e.message, 'danger'); }
+        }
+        async function removeNode(id) {
+            if (!confirm(`Remove node "${id}"? Its port pool is freed; existing tunnels keep their stored host.`)) return;
+            try { await API.deleteNode(id); toast('Node removed', 'success'); refresh(); }
+            catch (e) { toast(e.message, 'danger'); }
+        }
+
+        async function unblockRegion(cc) { try { await API.removeRegionBlock(cc); refresh(); } catch (e) { toast(e.message, 'danger'); } }
+        async function unblockPort(p)   { try { await API.removePortBlock(p); refresh(); } catch (e) { toast(e.message, 'danger'); } }
 
         document.getElementById('regionForm').addEventListener('submit', async (e) => {
             e.preventDefault();

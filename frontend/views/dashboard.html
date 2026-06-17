@@ -4,154 +4,317 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NatForge — Service Host</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="icon" href="../assets/img/natforge_flake.ico">
     <link href="../assets/css/style.css" rel="stylesheet">
 </head>
 <body>
-    <div class="d-flex">
-        <div class="sidebar p-3 d-flex flex-column" style="width: 250px;">
-            <h4 class="mb-4 d-flex align-items-center"><span class="me-2">🔥</span> NatForge</h4>
-            <ul class="nav flex-column mb-auto">
-                <li class="nav-item"><a href="dashboard.html" class="nav-link active">🏠 Service Host</a></li>
-                <li class="nav-item"><a href="ipbase.html" class="nav-link">⚡ IP Host (Edge Node)</a></li>
-                <li class="nav-item mt-4 admin-only"><a href="admin.html" class="nav-link text-warning">🛡️ Admin Panel</a></li>
-            </ul>
-            <hr>
-            <a href="#" onclick="logout()" class="nav-link text-danger">🚪 Logout</a>
-        </div>
-
-        <div class="flex-grow-1 p-4 bg-light">
-            <h2 class="mb-1">Service Host Dashboard</h2>
-            <p class="text-muted">Expose local services to the internet through one tunnel. HTTP/HTTPS routes share your subdomain; raw TCP routes (e.g. Minecraft) get a dedicated port.</p>
-
-            <div class="row mb-4">
-                <div class="col-md-3"><div class="card p-3 shadow-sm border-0 border-start border-primary border-4">
-                    <div class="text-muted small">Active Tunnels</div><h4 class="mb-0" id="statTunnels">—</h4></div></div>
-                <div class="col-md-3"><div class="card p-3 shadow-sm border-0 border-start border-success border-4">
-                    <div class="text-muted small">Data In</div><h4 class="mb-0" id="statIn">—</h4></div></div>
-                <div class="col-md-3"><div class="card p-3 shadow-sm border-0 border-start border-info border-4">
-                    <div class="text-muted small">Data Out</div><h4 class="mb-0" id="statOut">—</h4></div></div>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="brand">
+                <img src="../assets/img/natforge_flake.png" alt="">
+                <span class="name">NatForge</span>
             </div>
+            <nav class="nav">
+                <a href="dashboard.html" class="nav-link active"><span data-icon="service"></span> Service Host</a>
+                <a href="admin.html" class="nav-link admin-only"><span data-icon="admin"></span> Admin</a>
+                <a href="users.html" class="nav-link admin-only"><span data-icon="users"></span> Users</a>
+            </nav>
+            <div class="nav-spacer"></div>
+            <a href="#" onclick="logout()" class="nav-link danger"><span data-icon="logout"></span> Sign out</a>
+        </aside>
 
-            <div class="card shadow-sm mb-4">
-                <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">Your Tunnels</h5>
-                    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#reqModal">+ Request Tunnel</button>
-                </div>
-                <div class="card-body p-0">
-                    <table class="table table-hover mb-0 align-middle">
-                        <thead class="table-light"><tr><th>Tunnel</th><th>Status</th><th>Routes</th><th>Traffic</th><th></th></tr></thead>
-                        <tbody id="tunnelRows"><tr><td colspan="5" class="text-center text-muted py-4">Loading…</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
+        <main class="content">
+            <h2 class="page-title">Service Host</h2>
+            <p class="page-sub">Expose any local server to the internet through one tunnel — game servers (Minecraft, Terraria, GTA-MTA, …), websites, APIs, SSH, anything that listens on a TCP port. HTTP/HTTPS routes are reached by your subdomain; raw-TCP routes get a dedicated public port.</p>
 
-            <div class="card shadow-sm mb-4">
-                <div class="card-header bg-white"><h5 class="mb-0">Link a CLI Device</h5></div>
+            <div class="card" style="border-left:3px solid var(--brand)">
                 <div class="card-body">
-                    <p class="text-muted small mb-2">Run <code>proxy_node service-host</code>; it prints a code. Enter it here to authorise the device (RFC 8628).</p>
-                    <form id="deviceForm" class="d-flex" style="max-width: 360px;">
-                        <input type="text" id="deviceCode" class="form-control me-2 text-uppercase" placeholder="ABCD-EFGH" required>
-                        <button type="submit" class="btn btn-outline-dark">Authorise</button>
+                    <h5 style="margin-bottom:8px">Getting started</h5>
+                    <ol class="muted small" style="margin:0; padding-left:18px; line-height:1.9">
+                        <li><strong>Request a tunnel</strong> — pick a subdomain (or leave it blank for a random one) and add a route per local port. Choose the route type:
+                            <span class="badge http">http</span>/<span class="badge https">https</span> for websites/APIs (reached at <code>name.natforge.com</code>),
+                            <span class="badge tcp">tcp</span> for game and other raw servers (reached at <code>natforge.com:port</code>).</li>
+                        <li><strong>Run the agent</strong> on the machine hosting your server using the printed command (no port-forwarding needed).</li>
+                        <li><strong>Share</strong> the address shown for each route — <code>name.natforge.com</code> for a website, or <code>name.natforge.com:port</code> for a game server. That name points at the NatForge server (not your own IP), which relays to your machine.</li>
+                    </ol>
+                    <p class="faint small mt" style="margin-bottom:0">Note: routes are TCP. UDP-only games (e.g. Rust, Valheim) aren't supported yet.</p>
+                </div>
+            </div>
+
+            <div class="stat-grid">
+                <div class="stat"><div class="label">Active tunnels</div><div class="value" id="statTunnels">—</div></div>
+                <div class="stat green"><div class="label">Data in</div><div class="value" id="statIn">—</div></div>
+                <div class="stat amber"><div class="label">Data out</div><div class="value" id="statOut">—</div></div>
+            </div>
+
+            <div class="card">
+                <div class="card-head">
+                    <h5>Service Host</h5>
+                    <div class="row-inline" style="align-items:center; gap:10px">
+                        <select id="tunnelSelect" class="input" style="min-width:240px" onchange="selectTunnel(this.value)">
+                            <option value="">Loading…</option>
+                        </select>
+                        <button class="btn btn-primary btn-sm" data-modal-open="reqModal"><span data-icon="plus"></span> Request tunnel</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div id="tunnelDetail">
+                        <p class="empty">No tunnels yet. Click &ldquo;Request tunnel&rdquo; to expose your first local service.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-head"><h5>Link a CLI device</h5></div>
+                <div class="card-body">
+                    <p class="muted small">Run <code>proxy_node service-host</code> on your machine; it prints a code. Enter it here to authorise the device (RFC 8628 device flow).</p>
+                    <form id="deviceForm" class="row-inline" style="max-width:380px">
+                        <input type="text" id="deviceCode" class="input code-input" placeholder="ABCD-EFGH" required style="flex:1">
+                        <button type="submit" class="btn btn-secondary"><span data-icon="device"></span> Authorise</button>
                     </form>
                 </div>
             </div>
-        </div>
+        </main>
     </div>
 
-    <!-- Request tunnel modal: route builder -->
-    <div class="modal fade" id="reqModal" tabindex="-1">
-      <div class="modal-dialog modal-lg"><div class="modal-content">
-        <div class="modal-header"><h5 class="modal-title">Request a tunnel</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <!-- Request tunnel modal -->
+    <div class="modal-overlay" id="reqModal">
+      <div class="modal">
+        <div class="modal-head"><h5>Request a tunnel</h5><button class="x-btn" data-modal-close><span data-icon="close"></span></button></div>
         <div class="modal-body">
-          <p class="text-muted small">Add the local ports you want to expose and their type.</p>
-          <div id="routeBuilder"></div>
-          <button class="btn btn-outline-secondary btn-sm mt-2" onclick="addRouteRow()">+ Add route</button>
-          <hr>
-          <button class="btn btn-primary" id="reqSubmit">Reserve tunnel</button>
-          <div id="reqResult" class="mt-3"></div>
+            <div class="field">
+                <label class="lbl">Subdomain <span class="faint small">(optional — leave blank for a random name)</span></label>
+                <div class="row-inline" style="align-items:center">
+                    <input type="text" id="reqSubdomain" class="input" placeholder="my-server" pattern="[a-z0-9-]{3,30}" style="flex:1">
+                    <span class="faint small">.natforge.com</span>
+                </div>
+            </div>
+            <div class="field">
+                <label class="lbl">Region <span class="faint small">(where the tunnel is hosted)</span></label>
+                <select id="reqRegion" class="input" style="width:100%">
+                    <option value="">Default region</option>
+                </select>
+            </div>
+            <label class="lbl">Routes</label>
+            <p class="muted small" style="margin-top:0">One per local port. Add an optional label so you remember what each is.</p>
+            <div id="routeBuilder"></div>
+            <button class="btn btn-secondary btn-sm mt" onclick="addRouteRow()"><span data-icon="plus"></span> Add route</button>
+            <hr class="sep">
+            <button class="btn btn-primary" id="reqSubmit">Reserve tunnel</button>
+            <div id="reqResult" class="mt"></div>
         </div>
-      </div></div>
+      </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="../api/client.js"></script>
     <script src="../assets/js/app.js"></script>
     <script>
-        if (requireAuth()) { loadTunnels(); setInterval(loadTunnels, 4000); addRouteRow(); }
+        let tunnelsCache = [];
+        let selectedTunnelId = null;
+        let blockingForId = null; // which tunnel the blocking editor currently shows
 
-        function routeBadge(mode) {
-            const m = { http: 'bg-primary', https: 'bg-success', tcp: 'bg-secondary' }[mode] || 'bg-dark';
-            return `<span class="badge ${m} text-uppercase">${mode}</span>`;
-        }
+        if (requireAuth()) { loadRegions(); loadTunnels(); setInterval(loadTunnels, 4000); addRouteRow(); }
+
         function routeLine(r) {
             const ep = (r.mode === 'http' || r.mode === 'https')
-                ? `<a href="${r.public_endpoint}" target="_blank">${r.public_endpoint}</a>`
-                : `<code>${r.public_endpoint}</code>`;
-            return `<div class="small">${routeBadge(r.mode)} ${ep} <span class="text-muted">← :${r.local_port}</span></div>`;
+                ? `<a href="${r.public_endpoint}" target="_blank" rel="noopener">${r.public_endpoint} ${nfIcon('link')}</a>`
+                : `<span class="endpoint">${r.public_endpoint}</span>`;
+            const label = r.label ? `<span class="badge tag" style="margin-right:6px">${r.label}</span>` : '';
+            return `<div class="route-line">${label}<span class="badge ${r.mode}">${r.mode}</span> ${ep} <span class="faint small">&larr; :${r.local_port}</span></div>`;
+        }
+
+        function tunnelName(t) {
+            const label = t.routes.map(r => r.label).find(Boolean);
+            return label ? `${label} (${t.subdomain})` : t.full_host;
+        }
+
+        async function loadRegions() {
+            try {
+                const regions = await API.getRegions();
+                const opts = ['<option value="">Default region</option>']
+                    .concat(regions.map(r => `<option value="${r.node_id}">${escapeHtml(r.region || r.name)}</option>`));
+                document.getElementById('reqRegion').innerHTML = opts.join('');
+            } catch (_) { /* regions are optional sugar; ignore if unavailable */ }
         }
 
         async function loadTunnels() {
             try {
                 const tunnels = await API.getTunnels();
+                tunnelsCache = tunnels;
                 document.getElementById('statTunnels').textContent = tunnels.length;
                 let din = 0, dout = 0;
-                const rows = tunnels.map(t => {
-                    din += t.bytes_in; dout += t.bytes_out;
-                    const badge = t.status === 'online'
-                        ? '<span class="badge bg-success">online</span>'
-                        : `<span class="badge bg-secondary">${t.status}</span>`;
-                    const routes = t.routes.map(routeLine).join('');
-                    return `<tr>
-                        <td><span class="fw-bold">${t.full_host}</span><div class="text-muted small">#${t.tunnel_id}</div></td>
-                        <td>${badge}</td>
-                        <td>${routes}</td>
-                        <td class="small text-muted">↓${fmtBytes(t.bytes_in)}<br>↑${fmtBytes(t.bytes_out)}</td>
-                        <td><button class="btn btn-sm btn-outline-danger" onclick="stopTunnel(${t.tunnel_id})">Stop</button></td>
-                    </tr>`;
-                }).join('');
-                document.getElementById('tunnelRows').innerHTML = rows ||
-                    '<tr><td colspan="5" class="text-center text-muted py-4">No tunnels yet. Click “Request Tunnel”.</td></tr>';
+                tunnels.forEach(t => { din += t.bytes_in; dout += t.bytes_out; });
                 document.getElementById('statIn').textContent = fmtBytes(din);
                 document.getElementById('statOut').textContent = fmtBytes(dout);
+
+                // Keep the current selection if it still exists, else pick the first.
+                if (!tunnels.some(t => t.tunnel_id === selectedTunnelId)) {
+                    selectedTunnelId = tunnels.length ? tunnels[0].tunnel_id : null;
+                }
+                const sel = document.getElementById('tunnelSelect');
+                sel.innerHTML = tunnels.length
+                    ? tunnels.map(t => `<option value="${t.tunnel_id}">${escapeHtml(tunnelName(t))} — ${t.status.replace('_',' ')}</option>`).join('')
+                    : '<option value="">No tunnels</option>';
+                if (selectedTunnelId !== null) sel.value = String(selectedTunnelId);
+
+                renderMain();
+            } catch (err) { toast(err.message, 'danger'); }
+        }
+
+        function selectedTunnel() {
+            return tunnelsCache.find(t => t.tunnel_id === selectedTunnelId) || null;
+        }
+
+        // Switch the chosen tunnel; renderMain handles the skeleton + blocking editor.
+        function selectTunnel(id) {
+            selectedTunnelId = id ? parseInt(id, 10) : null;
+            renderMain();
+        }
+
+        // Refresh header + routes + logging (safe to run on a timer; it only touches
+        // the blocking editor when the selected tunnel actually changes).
+        async function renderMain() {
+            const t = selectedTunnel();
+            const host = document.getElementById('tunnelDetail');
+            if (!t) {
+                host.innerHTML = '<p class="empty">No tunnels yet. Click &ldquo;Request tunnel&rdquo; to expose your first local service.</p>';
+                blockingForId = null;
+                return;
+            }
+            // Build the skeleton once (so the blocking editor survives timer refreshes).
+            if (!document.getElementById('detailMain')) {
+                host.innerHTML = `<div id="detailMain"></div><hr class="sep"><div id="detailBlocking"></div>`;
+                blockingForId = null;
+            }
+            // (Re)load the blocking editor only when the tunnel changed.
+            if (blockingForId !== t.tunnel_id) {
+                blockingForId = t.tunnel_id;
+                renderBlocking(t);
+            }
+            const region = t.region ? `<span class="badge tag">${nfIcon('globe')} ${escapeHtml(t.region)}</span>` : '';
+            const routes = t.routes.map(routeLine).join('');
+            const flags = t.routes.map(x => `--route ${x.local_port}:${x.mode}`).join(' \\\n  ');
+            const agentIp = t.agent_ip ? `<span class="faint small">agent ${t.agent_ip}</span>` : '';
+            document.getElementById('detailMain').innerHTML = `
+                <div class="row-inline" style="justify-content:space-between; align-items:flex-start; gap:12px">
+                    <div>
+                        <div class="host" style="font-size:1.1rem">${t.full_host}</div>
+                        <div class="row-inline mt-xs" style="gap:8px; align-items:center">
+                            <span class="badge ${t.status}">${t.status.replace('_',' ')}</span>${region} ${agentIp}
+                            <span class="faint small">#${t.tunnel_id}</span>
+                        </div>
+                    </div>
+                    <button class="btn btn-danger btn-sm" onclick="stopTunnel(${t.tunnel_id})">${nfIcon('stop')} Stop</button>
+                </div>
+
+                <label class="lbl mt">Routes</label>
+                <div>${routes}</div>
+                <details class="mt-xs"><summary class="faint small" style="cursor:pointer">Show agent command</summary>
+                    <pre class="block" style="margin-top:8px">proxy_node service-host \\\n  ${flags} \\\n  --token &lt;your session token&gt;</pre>
+                </details>
+
+                <label class="lbl mt">Logging — bandwidth</label>
+                <div class="stat-grid" style="margin:6px 0 0">
+                    <div class="stat green"><div class="label">Data in</div><div class="value">${fmtBytes(t.bytes_in)}</div></div>
+                    <div class="stat amber"><div class="label">Data out</div><div class="value">${fmtBytes(t.bytes_out)}</div></div>
+                    <div class="stat"><div class="label">Total</div><div class="value">${fmtBytes(t.bytes_in + t.bytes_out)}</div></div>
+                </div>
+
+                <label class="lbl mt">Logging — recent connections</label>
+                <div class="card-body flush"><table class="table">
+                    <thead><tr><th>When</th><th>Source</th><th>Region</th><th>Route</th><th>In / Out</th><th>Held</th></tr></thead>
+                    <tbody id="connRows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+                </table></div>`;
+            loadConnLogs(t.tunnel_id);
+        }
+
+        async function loadConnLogs(id) {
+            try {
+                const logs = await API.getTunnelLogs(id);
+                if (id !== selectedTunnelId) return; // selection changed mid-flight
+                const body = document.getElementById('connRows');
+                if (!body) return;
+                body.innerHTML = logs.length ? logs.map(l => {
+                    const when = new Date(l.created_at).toLocaleString();
+                    const cc = l.country ? `<span class="badge tag">${escapeHtml(l.country)}</span>` : '<span class="faint small">—</span>';
+                    const blocked = l.blocked ? '<span class="badge offline" style="margin-left:6px">blocked</span>' : '';
+                    const held = l.duration_ms >= 1000 ? `${(l.duration_ms/1000).toFixed(1)}s` : `${l.duration_ms}ms`;
+                    return `<tr>
+                        <td class="faint small">${escapeHtml(when)}</td>
+                        <td><span class="endpoint">${escapeHtml(l.peer_ip)}</span>${blocked}</td>
+                        <td>${cc}</td>
+                        <td><span class="badge ${l.kind}">${l.kind}</span> <span class="faint small">#${l.route_id}</span></td>
+                        <td class="faint small">${fmtBytes(l.bytes_in)} / ${fmtBytes(l.bytes_out)}</td>
+                        <td class="faint small">${held}</td>
+                    </tr>`;
+                }).join('') : '<tr><td colspan="6" class="empty">No connections logged yet.</td></tr>';
+            } catch (_) { /* transient; next tick retries */ }
+        }
+
+        async function renderBlocking(t) {
+            const host = document.getElementById('detailBlocking');
+            if (!host) return;
+            let codes = [];
+            try { codes = await API.getTunnelRegionBlocks(t.tunnel_id); } catch (_) {}
+            host.innerHTML = `
+                <label class="lbl">Blocking — countries</label>
+                <p class="muted small" style="margin-top:0">Refuse connections from these countries (ISO-3166 alpha-2, comma-separated, e.g. <code>RU, CN</code>). Applies to this tunnel only; the admin may block regions platform-wide too.</p>
+                <div class="row-inline" style="align-items:center">
+                    <input type="text" id="blockInput" class="input" style="flex:1" placeholder="RU, CN, KP" value="${escapeHtml(codes.join(', '))}">
+                    <button class="btn btn-secondary" onclick="saveBlocks(${t.tunnel_id})">${nfIcon('shield')} Save</button>
+                </div>`;
+        }
+
+        async function saveBlocks(id) {
+            const raw = document.getElementById('blockInput').value || '';
+            const codes = raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+            try {
+                const r = await API.setTunnelRegionBlocks(id, codes);
+                document.getElementById('blockInput').value = (r.country_codes || []).join(', ');
+                toast('Country block list saved', 'success');
             } catch (err) { toast(err.message, 'danger'); }
         }
 
         async function stopTunnel(id) {
-            try { await API.stopTunnel(id); toast(`Stopped tunnel #${id}`, 'success'); loadTunnels(); }
+            try { await API.stopTunnel(id); toast(`Stopped tunnel #${id}`, 'success');
+                  if (id === selectedTunnelId) selectedTunnelId = null; loadTunnels(); }
             catch (err) { toast(err.message, 'danger'); }
         }
 
-        // --- route builder ---
         function addRouteRow(mode = 'http', port = 8080) {
             const div = document.createElement('div');
-            div.className = 'input-group mb-2 route-row';
+            div.className = 'route-row';
+            div.style.cssText = 'display:flex; gap:8px; margin-bottom:8px; align-items:center';
             div.innerHTML = `
-                <span class="input-group-text">local port</span>
-                <input type="number" class="form-control route-port" value="${port}" min="1" max="65535">
-                <select class="form-select route-mode" style="max-width:140px">
+                <input type="number" class="input route-port" value="${port}" min="1" max="65535" title="local port" style="max-width:96px">
+                <select class="input route-mode" title="route type" style="max-width:110px">
                     <option value="http">HTTP</option><option value="https">HTTPS</option><option value="tcp">TCP</option>
                 </select>
-                <button class="btn btn-outline-danger" type="button" onclick="this.closest('.route-row').remove()">✕</button>`;
+                <input type="text" class="input route-label" placeholder="label (optional)" maxlength="40" style="flex:1">
+                <button type="button" class="btn btn-secondary btn-icon" title="Remove route" onclick="this.closest('.route-row').remove()">${nfIcon('close')}</button>`;
             div.querySelector('.route-mode').value = mode;
             document.getElementById('routeBuilder').appendChild(div);
         }
 
         document.getElementById('reqSubmit').addEventListener('click', async () => {
+            const subdomain = document.getElementById('reqSubdomain').value.trim().toLowerCase();
+            const region = document.getElementById('reqRegion').value || null;
             const routes = [...document.querySelectorAll('.route-row')].map(r => ({
                 mode: r.querySelector('.route-mode').value,
                 local_port: parseInt(r.querySelector('.route-port').value, 10),
+                label: r.querySelector('.route-label').value.trim() || null,
             }));
-            if (!routes.length) { toast('add at least one route', 'danger'); return; }
+            if (!routes.length) { toast('Add at least one route', 'danger'); return; }
             try {
-                const r = await API.requestTunnel(routes);
+                const r = await API.requestTunnel(routes, subdomain, region);
                 const flags = r.routes.map(x => `--route ${x.local_port}:${x.mode}`).join(' \\\n  ');
+                const where = r.region ? ` in ${escapeHtml(r.region)}` : '';
+                const regionFlag = r.node_id ? ` \\\n  --region ${r.node_id}` : '';
                 document.getElementById('reqResult').innerHTML =
-                    `<div class="alert alert-success mb-2">Reserved <strong>${r.full_host}</strong> (${r.status})</div>
-                     <p class="small mb-1">Run the agent on the machine hosting your services:</p>
-                     <pre class="bg-dark text-light p-3 rounded small" style="white-space:pre-wrap">proxy_node service-host \\\n  ${flags} \\\n  --token &lt;your session token&gt;</pre>
-                     <p class="small text-muted">Or authorise the device interactively (it will print a code to enter above).</p>`;
+                    `<div class="badge online" style="margin-bottom:10px">Reserved ${r.full_host}${where} (${r.status})</div>
+                     <p class="muted small" style="margin:0 0 6px">Run the agent on the machine hosting your server(s):</p>
+                     <pre class="block">proxy_node service-host \\\n  ${flags}${regionFlag} \\\n  --token &lt;your session token&gt;</pre>`;
+                selectedTunnelId = r.tunnel_id; // focus the new tunnel after refresh
                 loadTunnels();
             } catch (err) { toast(err.message, 'danger'); }
         });
