@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NatForge — Users</title>
+    <link rel="icon" href="../assets/img/natforge_flake.ico">
+    <link href="../assets/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="brand">
+                <img src="../assets/img/natforge_flake.png" alt="">
+                <span class="name">NatForge</span>
+            </div>
+            <nav class="nav">
+                <a href="dashboard.html" class="nav-link"><span data-icon="service"></span> Service Host</a>
+                <a href="admin.html" class="nav-link"><span data-icon="admin"></span> Admin</a>
+                <a href="users.html" class="nav-link active"><span data-icon="users"></span> Users</a>
+            </nav>
+            <div class="nav-spacer"></div>
+            <a href="#" onclick="logout()" class="nav-link danger"><span data-icon="logout"></span> Sign out</a>
+        </aside>
+
+        <main class="content">
+            <h2 class="page-title">Users</h2>
+            <p class="page-sub">Everyone on the network, their tunnels, the IP each agent connects from, and total traffic. Click a user to see their tunnels in detail.</p>
+
+            <div class="stat-grid" id="userStats"></div>
+
+            <div class="card">
+                <div class="card-head"><h5>All users</h5></div>
+                <div class="card-body flush">
+                    <table class="table">
+                        <thead><tr><th>User</th><th>Role</th><th>Tunnels</th><th>Total traffic</th><th>Last seen</th></tr></thead>
+                        <tbody id="userRows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="../api/client.js"></script>
+    <script src="../assets/js/app.js"></script>
+    <script>
+        let TUNNELS_BY_OWNER = {};
+        if (requireAuth(true)) { refresh(); setInterval(refresh, 5000); }
+
+        async function refresh() {
+            try {
+                const [users, tunnels] = await Promise.all([API.getUsers(), API.getAllTunnels()]);
+                TUNNELS_BY_OWNER = {};
+                tunnels.forEach(t => { (TUNNELS_BY_OWNER[t.owner_id] ||= []).push(t); });
+                renderStats(users);
+                renderUsers(users);
+            } catch (err) { toast(err.message, 'danger'); }
+        }
+
+        function stat(label, value, cls, ic) {
+            return `<div class="stat ${cls || ''}"><div class="flex between"><div class="label">${label}</div>${nfIcon(ic)}</div><div class="value">${value}</div></div>`;
+        }
+        function renderStats(users) {
+            const admins = users.filter(u => u.role === 'admin').length;
+            const totalBytes = users.reduce((a, u) => a + u.total_bytes, 0);
+            const totalTunnels = users.reduce((a, u) => a + u.tunnel_count, 0);
+            document.getElementById('userStats').innerHTML =
+                stat('Users', users.length, '', 'users') +
+                stat('Admins', admins, 'amber', 'admin') +
+                stat('Tunnels', totalTunnels, 'green', 'service') +
+                stat('Total traffic', fmtBytes(totalBytes), '', 'activity');
+        }
+
+        function routeBadges(t) { return t.routes.map(r => `<span class="badge ${r.mode}">${r.label ? r.label + ' ' : ''}${r.mode}:${r.local_port}</span>`).join(' '); }
+
+        function detailRow(uid) {
+            const ts = TUNNELS_BY_OWNER[uid] || [];
+            const inner = ts.length ? ts.map(t =>
+                `<div class="flex between" style="padding:8px 0; border-bottom:1px solid var(--border); gap:12px; flex-wrap:wrap">
+                    <div><span class="host">${t.full_host}</span>
+                         <span class="badge ${t.status}" style="margin-left:8px">${t.status.replace('_',' ')}</span>
+                         <div class="faint small">agent ${t.agent_ip || '—'} &middot; ${routeBadges(t)}</div></div>
+                    <div class="faint small">${nfIcon('download')} ${fmtBytes(t.bytes_in)} &nbsp; ${nfIcon('upload')} ${fmtBytes(t.bytes_out)}</div>
+                </div>`).join('') : '<div class="faint small">No tunnels.</div>';
+            return `<tr class="detail" data-for="${uid}" style="display:none"><td colspan="5" style="background:var(--bg-sunken)">${inner}</td></tr>`;
+        }
+
+        function renderUsers(users) {
+            const rows = users.map(u => {
+                const roleBadge = u.role === 'admin'
+                    ? '<span class="badge" style="color:var(--amber);background:rgba(232,161,58,.14)">admin</span>'
+                    : '<span class="badge tag">user</span>';
+                return `<tr style="cursor:pointer" onclick="toggleUser(${u.id})">
+                    <td><div class="host">${u.email}</div><div class="faint small">#${u.id}</div></td>
+                    <td>${roleBadge}</td>
+                    <td>${u.tunnel_count}</td>
+                    <td class="faint small">${fmtBytes(u.total_bytes)}</td>
+                    <td class="faint small">${fmtAgo(u.last_seen)}</td>
+                </tr>${detailRow(u.id)}`;
+            }).join('');
+            document.getElementById('userRows').innerHTML = rows || '<tr><td colspan="5" class="empty">No users.</td></tr>';
+        }
+
+        function toggleUser(uid) {
+            const row = document.querySelector(`tr.detail[data-for="${uid}"]`);
+            if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
+        }
+    </script>
+</body>
+</html>
