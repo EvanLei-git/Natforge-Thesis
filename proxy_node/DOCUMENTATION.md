@@ -1,40 +1,28 @@
 # Proxy Node (Agent) — Documentation
 
-`proxy_node` is the unified NatForge **agent**: a single Rust binary that runs on the end-user's machine in one of two roles. It authenticates against the control plane, then connects to the data plane.
+`proxy_node` is the NatForge **Service-Host agent** — one binary. It authenticates against the control plane, reserves a tunnel (in a chosen region), then connects to that region's data-plane node over TLS.
 
-## Authentication (all modes)
-Resolved in priority order by `auth::obtain_token`:
-1. `--token <JWT>` — use a pre-issued session token (non-interactive).
-2. `--email` + `--password` — log in directly (non-interactive).
-3. Otherwise — the **RFC 8628 device flow**: the CLI prints a code and verification URL; the user approves it from the dashboard; the CLI polls until approved.
+## Authentication
+Priority order (`auth::obtain_token`): `--token <JWT>` → `--email`+`--password` → RFC 8628 device flow (prints a code to approve in the dashboard, polls until approved).
 
-## Mode 1 — Service Host
-Expose a local service through a reverse tunnel.
+## Service Host (multi-route)
+Expose one or more local services through a single tunnel:
 
 ```bash
 proxy_node service-host \
-  --local-port 25565 \
-  --control-plane http://127.0.0.1:3000 \
-  --tunnel-server 127.0.0.1:4000
+  --route 8000:http --route 9443:https --route 25565:tcp \
+  --region <node_id> \           # optional: pick a region (default region otherwise)
+  --email you@example.com --password ...
+# legacy: --local-port 25565  (sugar for one tcp route)
+# dev only: --tunnel-server 127.0.0.1:4000  (override the connect address)
 ```
 
-Flow: reserve a subdomain (`POST /api/tunnels/request`) → connect to the core control port → length-prefixed handshake with the tunnel token → on `Ok`, print the live public endpoint → run a **yamux server** loop, accepting one inbound stream per public connection and bridging each to `127.0.0.1:<local-port>` with `copy_bidirectional`. Reconnects automatically on disconnect, preserving the subdomain via reservation reuse.
+Flow: `POST /api/tunnels/request {routes:[{mode,local_port}], node_id?}` → reservation `{tunnel_id, subdomain, tunnel_token, control_endpoint, region, control_cert_fingerprint, routes:[{route_id,mode,local_port,public_endpoint}]}`. TCP-connect to `control_endpoint` (the node the reservation names) and **wrap it in TLS**, pinning `control_cert_fingerprint` via a custom `rustls` verifier (`tls.rs`). Send the handshake with the per-route `{route_id, local_port}` bindings; on `Ok`, build a `route_id → local_port` map and run a **yamux server**. For each inbound stream, read the **preamble** (`natforge_proto::read_preamble`) to get the `route_id`, dial `127.0.0.1:<local_port>`, write any replay bytes, then `copy_bidirectional`. Auto-reconnects on drop; idempotent reservation preserves the subdomain, region, and ports.
 
-## Mode 2 — IP Host (Edge Node)
-Volunteer this machine as a residential relay.
+## Modules
+`main.rs` (CLI) · `auth.rs` (token) · `service_host.rs` (reserve + serve; also the wire-frame helpers, with the handshake/preamble contract re-used from the shared `natforge-proto` crate) · `tls.rs` (pinned-cert TLS client).
 
-```bash
-proxy_node ip-host \
-  --listen-port 30000 \
-  --upstream <core-host>:<public-port> \
-  --max-bandwidth 100 \
-  --control-plane http://127.0.0.1:3000
-```
-
-Flow: register as active (`POST /api/ip_host/status`) → best-effort reflexive public-IP discovery (STUN-like) → run a TCP forwarder from `--listen-port` to `--upstream`, relaying in-memory and accounting bytes. Because egress occurs from this machine, end users reach the service via this residential IP (Scenario B).
-
-## Implementation notes
-- **Multiplexing:** `yamux` over a single outbound TCP connection (one NAT mapping, full concurrency).
-- **Compat:** `tokio_util::compat` bridges Tokio sockets ↔ yamux's futures-io streams.
-- **Zero-disk:** all relaying is `tokio::io::copy_bidirectional` over transient memory buffers.
-- **Future work:** direct UDP hole punching (STUN candidate exchange via the control plane) and WireGuard encapsulation are designed but not yet implemented; the relay/edge tiers are the working data paths today.
+## Notes
+- The wire contract (handshake, claims, preamble codec) lives in the shared `natforge-proto` crate, so agent and core cannot drift.
+- `tokio_util::compat` bridges Tokio sockets ↔ yamux's futures-io streams; relaying is `copy_bidirectional` (zero-disk).
+- Future work: UDP hole punching (STUN via the control plane) to remove the relay leg for non-symmetric NATs.

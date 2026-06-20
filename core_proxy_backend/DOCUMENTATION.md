@@ -1,49 +1,36 @@
 # Core Proxy Backend (Data Plane) — Documentation
 
-`core_proxy_backend` is the NatForge **data plane**: a Tokio service that performs the actual byte relaying. It accepts a single TCP control connection per agent, upgrades it to a **yamux** multiplexed session, binds a dedicated public port per tunnel, and bridges every inbound public connection to a fresh multiplexed stream the agent forwards to the local service.
+`core_proxy_backend` is a NatForge **data-plane node** (one per region): a Tokio service that performs the byte relaying. Each agent's control connection is wrapped in **TLS** and becomes a **yamux** session carrying **multiple routes**; public traffic is routed to the right route by subdomain (HTTP `Host` / TLS SNI on shared ports) or by dedicated TCP port. On boot the node **self-registers** with the control plane (its host, port pool, and TLS cert fingerprint).
 
 ## Listeners
-- **Agent control plane** — default `:4000`. Agents connect here; after a length-prefixed JSON handshake the socket becomes a yamux session (core = client, agent = server).
-- **Public port pool** — default `20000`–`20100`. One port allocated per tunnel; end users connect here.
-- **Internal API** — default `:3001`. Consumed by the website control plane.
+- **Agent control** `:4000` — agents connect over **TLS** (self-signed, fingerprint-pinned); length-prefixed JSON handshake, then yamux (core = client, agent = server).
+- **Shared HTTP** `:80` (dev `:8080`) — routes by `Host` header → subdomain.
+- **Shared HTTPS** `:443` (dev `:8443`) — routes by **TLS SNI**, layer-4 passthrough (never decrypts).
+- **Dedicated TCP** — one pooled public port per `tcp` route.
+- **Internal API** `:3001` — consumed by the control plane (secret-guarded).
 
-## Data path (per agent)
-1. Read length-prefixed `AgentHello { tunnel_token, local_port, role }` (exact `read_exact`, no over-read).
-2. Verify the tunnel token (HS256, shared secret) — no database access (stateless).
-3. Refuse globally blocked local ports.
-4. Allocate a public port; bind its listener.
-5. Reply `CoreReply::Ok { public_host, public_port, subdomain }`, then upgrade to yamux.
-6. Per public connection: DDoS check → open outbound yamux stream → `copy_bidirectional` (in-memory, zero-disk) with byte accounting.
-7. Report `tunnel_up`, provision DNS SRV (mock), report bandwidth every 5s.
-8. On agent disconnect: abort listener, free port, report `tunnel_down`.
+## Data path (per public connection)
+1. Resolve the route: subdomain in `http_routes`/`https_routes`, or port in `port_routes`.
+2. Connection-rate guard (userspace, time-bounded blacklist) → resolve country (GeoLite2) and apply platform-wide + per-tunnel geo-blocks (drop + log `blocked` if denied) → open one yamux stream via the route's `open_tx`.
+3. Write the binary **preamble** (`natforge_proto::encode_preamble`: magic `NFS1`, route_id, peer, replay) — for HTTP/SNI the peeked bytes ride in `replay` so the origin sees a byte-exact request.
+4. `copy_bidirectional` (zero-disk). Byte counts tracked per tunnel (reported every 5s); each closed/blocked connection reports a metadata-only `conn_log` row.
+
+## Per-agent handshake (`tunnel/mod.rs`)
+TLS-accept the socket; verify the multi-route token (shared `natforge_proto::TunnelClaims`); reconcile the agent's route bindings against the token; ownership-guard the subdomain (reject if live under a different tunnel id); bind each signed TCP port; register http/https by subdomain and tcp by port; run one **pipelined** yamux driver (`mux.rs`); report `tunnel_up` + Redis mirror. Teardown (agent disconnect or force-stop) removes registry entries it still owns and aborts listeners.
 
 ## Module layout
 ```
-src/
-├── main.rs            boots internal API, control plane, periodic policy refresh
-├── config.rs          ports, public host, port pool, secrets
-├── jwt.rs             tunnel-token verification (shared secret)
-├── state.rs           CoreState: tunnels, free-port pool, ddos, blocked ports
-├── tunnel/
-│   ├── mod.rs         control listener + per-agent handler (the core data path)
-│   ├── mux.rs         single-borrow yamux client driver (poll_fn state machine)
-│   └── wireguard.rs   simulated WireGuard peer / bandwidth accounting
-├── ddos/filter.rs     per-IP sliding-window connection-rate guard
-├── dns/cloudflare.rs  SRV-record provisioning (mock unless CF_API_TOKEN set)
-├── api/routes.rs      internal API: health, list/close tunnels
-└── reporter.rs        outbound reporting to the control plane
+src/{config,jwt,state,reporter,tls,geo,main}.rs
+src/tunnel/{mod,mux,shared}.rs   # mod=TLS handler, mux=pipelined driver, shared=:80/:443 routers
+src/{ddos,dns,api}.rs            # connection-rate guard · Cloudflare SRV · internal API
 ```
 
-## Internal API
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/health` | Liveness |
-| GET | `/internal/tunnels` | Snapshot of live tunnels + byte counters |
-| POST | `/internal/tunnels/{subdomain}` | Force-close a tunnel (dashboard "Stop") |
+## Internal API (`x-internal-secret` required)
+`GET /health` · `GET /internal/tunnels` · `POST /internal/tunnels/{subdomain}/stop`.
 
-## Simulated vs. real
-- **Real:** yamux multiplexing, the full TCP relay, byte accounting, the connection-rate DDoS heuristic, port-policy enforcement, the internal reporting channel.
-- **Simulated (clearly labeled):** WireGuard encapsulation (`wireguard.rs`), kernel eBPF/XDP drop (the decision is real, the kernel action logged), and the live Cloudflare API call (logged by default; real if `CF_API_TOKEN` is set).
+## Real vs. deferred
+- **Real:** TLS-encrypted, fingerprint-pinned control channel (`tls.rs`); node self-registration; yamux multiplexing, multi-route, HTTP/Host + TLS/SNI subdomain routing (hand-rolled, bounds-checked, unit-tested parsers); the per-stream preamble; zero-disk relay; userspace time-bounded connection-rate guard; **GeoLite2 geo-blocking** (platform-wide + per-tunnel); per-connection logging; Redis liveness mirror; byte accounting; and **Cloudflare SRV provisioning** (`dns.rs` — a real `reqwest` v4 client; live with `CF_API_TOKEN`, logs in dev).
+- **Deferred:** kernel eBPF/XDP drop path (the guard is userspace by design), UDP hole punching. Geo-blocking requires a `GeoLite2-Country.mmdb` at `GEOIP_DB`; absent it, country resolution is "unknown" and blocking is a no-op.
 
-## Configuration (env)
-`CORE_INTERNAL_PORT` (3001), `CORE_CONTROL_PORT` (4000), `PUBLIC_HOST`, `PUBLIC_PORT_MIN`/`MAX`, `WEBSITE_URL`, `JWT_SECRET`, `INTERNAL_SECRET`, `CF_API_TOKEN`, `CF_ZONE_ID`.
+## Config
+`CORE_INTERNAL_PORT, CORE_CONTROL_PORT, HTTP_PORT, HTTPS_PORT, PUBLIC_HOST, NODE_ID, NODE_NAME, NODE_REGION, CONTROL_ENDPOINT, INTERNAL_URL, PUBLIC_PORT_MIN, PUBLIC_PORT_MAX, WEBSITE_URL, REDIS_URL, GEOIP_DB, JWT_SECRET, INTERNAL_SECRET, MAX_HEADER_BYTES, CF_API_TOKEN, CF_ZONE_ID`.

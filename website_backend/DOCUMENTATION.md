@@ -1,57 +1,47 @@
 # Website Backend (Control Plane) — Documentation
 
-`website_backend` is the NatForge **control plane**: an Axum HTTP service (default `:3000`) that owns user identity, tunnel reservation, edge-node configuration, administrative policy, and serving of the static dashboard. It is intentionally *out* of the high-throughput data path.
+`website_backend` is the NatForge **control plane**: an Axum HTTP service (`:3000`) backed by **PostgreSQL** (durable) and **Redis** (ephemeral). It owns identity, the multi-route tunnel reservation + region registry, per-tunnel observability, geo-blocking policy, admin policy, the internal API the nodes report to, and serving of the static dashboard. It is *not* in the data path.
 
 ## Responsibilities
-1. Authentication & authorization — Argon2id password hashing, HS256 JWT sessions, RFC 8628 device flow.
-2. Tunnel reservation and lifecycle (subdomain allocation, scoped tunnel tokens).
-3. IP-host (edge node) configuration and accounting.
-4. Administrative panels: region blocking, global port bans, network overview.
-5. The secret-guarded internal API the core proxy reports to.
-6. Serving the static frontend (`ServeDir`).
+1. Auth: Argon2id hashing, HS256 JWT sessions, RFC 8628 device flow (codes in Redis with TTL). Login/registration are **geo-gated** when a GeoLite2 DB is configured.
+2. **Multi-route** tunnel reservation: pick a region/node, allocate a subdomain + dedicated TCP ports from that node's pool, persist `tunnels`+`routes`, mint one signed multi-route token. Idempotent per (owner, route-shape) so reconnects reuse the same subdomain/region/ports.
+3. The `port_pool` allocator of record (`FOR UPDATE SKIP LOCKED`) + a reconciliation sweep for abandoned tunnels.
+4. The **region registry** (nodes self-register; admin renames/enables/removes), per-tunnel **bandwidth + connection logs**, platform-wide and per-tunnel **geo-blocking**, admin port/region blocks, stats, all-tunnels, users.
+5. Internal API for the nodes (secret-guarded). Serves the frontend (`ServeDir`).
+
+## Persistence
+- **PostgreSQL** via `sqlx` **runtime** queries (no compile-time `query!` macros → build needs no DB). Migrations `0001..0007` applied at boot. Tables: `users, tunnels, routes, nodes, port_pool, bandwidth_logs, connection_logs, region_blocks, tunnel_region_blocks, port_blocks, reserved_subdomains`.
+- **Redis** via `ConnectionManager`: device codes (`nf:devcode:*`, 10-min TTL) + the data plane's liveness mirror.
+- `AppState::connect` fails fast if either store is down and opens the optional GeoLite2 DB. Each data-plane node seeds its own port range when it self-registers.
 
 ## Module layout
 ```
-src/
-├── main.rs            router assembly, static serving, default policy seeding
-├── config.rs          environment configuration
-├── jwt.rs             session/tunnel token mint+verify; AuthUser extractor
-├── db/connection.rs   AppState (in-memory store shaped like the SQL schema)
-├── models/user.rs     User, TunnelInfo, DeviceCode, IpHostConfig
-├── handlers/          auth, tunnels, iphost, admin, internal
-└── routes/mod.rs      REST route table
+src/{config,jwt,geo,models,main}.rs
+src/db/{connection,queries}.rs   # connection.rs also holds the RFC 8628 device codes
+src/models.rs                    # FromRow rows + API view structs
+src/handlers/{auth,tunnels,admin,internal}.rs
+src/routes/mod.rs
+migrations/0001..0007_*.sql
 ```
-
-## State
-In-memory `RwLock`-guarded maps (`AppState`) standing in for PostgreSQL (durable) + Redis (live). Field shapes match the SQL schema in the thesis Appendix A, so migration is mechanical. The first registered account becomes `admin`.
 
 ## Public REST API (selected)
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/api/auth/register` | none | Create account, return JWT |
-| POST | `/api/auth/login` | none | Verify Argon2, return JWT |
-| POST | `/api/auth/device/start` | none | RFC 8628: issue device+user code |
-| POST | `/api/auth/device/token` | none | RFC 8628: poll for approval |
-| POST | `/api/auth/device` | session | RFC 8628: approve a user code |
-| GET | `/api/tunnels` | session | List caller's tunnels |
-| POST | `/api/tunnels/request` | session | Reserve subdomain + tunnel token |
-| DELETE | `/api/tunnels/{subdomain}` | session | Stop a tunnel |
-| GET/POST | `/api/ip_host/status` | session | Get/set edge-node active status |
-| PUT | `/api/user/preferences` | session | Bandwidth/geo preferences |
-| GET/POST | `/api/admin/region_blocks` | admin | List/add blocked countries |
-| DELETE | `/api/admin/region_blocks/{cc}` | admin | Unblock a country |
-| GET/POST | `/api/admin/port_blocks` | admin | List/add blocked ports |
-| DELETE | `/api/admin/port_blocks/{port}` | admin | Unblock a port |
-| GET | `/api/admin/stats` | admin | Network overview |
-| GET | `/api/admin/tunnels` | admin | All active tunnels |
+| POST | `/api/auth/register` \| `/login` | none | Argon2 + JWT (geo-gated) |
+| POST | `/api/auth/device/start` \| `/device/token` | none | RFC 8628 issue / poll |
+| POST | `/api/auth/device` | session | RFC 8628 approve |
+| GET | `/api/tunnels` | session | List tunnels (nested routes, region) |
+| POST | `/api/tunnels/request` | session | Reserve routes; mint token. Body: `{subdomain?, node_id?, routes:[{mode,local_port,label?}]}` |
+| DELETE | `/api/tunnels/{id}` | session | Stop a tunnel |
+| GET | `/api/tunnels/{id}/bandwidth` \| `/logs` | session | Per-tunnel bandwidth series / connection log |
+| GET/PUT | `/api/tunnels/{id}/region_blocks` | session | Get/replace this tunnel's blocked countries |
+| GET | `/api/regions` | session | Active regions (request dropdown) |
+| GET/POST/DELETE | `/api/admin/region_blocks[/{cc}]`, `/admin/port_blocks[/{port}]` | admin | Policy |
+| GET | `/api/admin/stats` \| `/admin/tunnels` \| `/admin/users` | admin | Network overview, all tunnels, per-user overview |
+| GET | `/api/admin/nodes` ; PATCH/DELETE `/api/admin/nodes/{id}` | admin | List / rename-enable / remove regions |
 
-## Internal API (core proxy only — `x-internal-secret` header required)
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/internal/tunnel_up` | Agent connected; mark tunnel online |
-| POST | `/api/internal/tunnel_down` | Agent gone; remove tunnel |
-| POST | `/api/internal/bandwidth` | Update byte counters |
-| GET | `/api/internal/policy` | Return blocked ports/regions |
+## Internal API (nodes only — `x-internal-secret`)
+`POST /api/internal/node_register {…}` · `tunnel_up {tunnel_id,node_id,agent_ip?}` · `tunnel_down {tunnel_id}` · `bandwidth {…}` · `conn_log {…}` · `GET /api/internal/policy` (blocked ports + regions + per-tunnel blocks).
 
-## Configuration (env)
-`PORT` (3000), `NATFORGE_DOMAIN`, `CORE_URL`, `FRONTEND_DIR`, `JWT_SECRET`, `INTERNAL_SECRET`. Dev defaults run on loopback with no external services.
+## Config
+`PORT, NATFORGE_DOMAIN, CORE_URL, FRONTEND_DIR, DATABASE_URL, REDIS_URL, GEOIP_DB, JWT_SECRET, INTERNAL_SECRET`. Dev defaults target the `docker compose` datastores. A startup WARN fires while dev secrets are in use.

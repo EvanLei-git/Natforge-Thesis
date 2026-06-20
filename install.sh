@@ -5,12 +5,13 @@
 # ==============================================================================
 # Automates deployment of the distributed NatForge platform.
 # Components available for configuration:
-#   1. website_backend (control plane): authentication, tunnels, admin, dashboard.
-#   2. core_proxy_backend (data plane): yamux relay, public-port pool, DDoS filter.
-#   3. proxy_node (agent): the Service Host or IP Host agent on end-user machines.
+#   1. website_backend (control plane): auth, tunnels, region registry, admin, dashboard.
+#   2. core_proxy_backend (data plane, one per region): TLS+yamux relay, per-region
+#      public-port pool, geo-blocking, connection-rate guard. Self-registers on boot.
+#   3. proxy_node (agent): the Service Host agent on end-user machines.
 #
 # Usage:
-#   sudo ./install.sh --component <website | core | node> [--mode <service-host|ip-host>]
+#   sudo ./install.sh --component <website | core | node> [--mode service-host]
 # ==============================================================================
 
 set -e
@@ -89,17 +90,20 @@ EOF
 case $COMPONENT in
     "website")
         configure_service "website_backend" "natforge-website" "$INSTALL_DIR/website_backend" \
-            "PORT=3000\nNATFORGE_DOMAIN=natforge.com\nCORE_URL=http://127.0.0.1:3001\nFRONTEND_DIR=/usr/local/share/natforge/frontend\nDATABASE_URL=postgres://natforge:natforge@127.0.0.1:5432/natforge\nREDIS_URL=redis://127.0.0.1:6379\nNODE_ID=edge-1\nPUBLIC_PORT_MIN=20000\nPUBLIC_PORT_MAX=20100\nJWT_SECRET=CHANGE_ME\nINTERNAL_SECRET=CHANGE_ME"
+            "PORT=3000\nNATFORGE_DOMAIN=natforge.com\nCORE_URL=http://127.0.0.1:3001\nFRONTEND_DIR=/usr/local/share/natforge/frontend\nDATABASE_URL=postgres://natforge:natforge@127.0.0.1:5432/natforge\nREDIS_URL=redis://127.0.0.1:6379\nGEOIP_DB=/etc/natforge/GeoLite2-Country.mmdb\nJWT_SECRET=CHANGE_ME\nINTERNAL_SECRET=CHANGE_ME"
         ;;
     "core")
         # Binds shared :80/:443 in production (service runs as root by default here).
+        # For a second region, change NODE_ID, NODE_NAME, NODE_REGION, PUBLIC_HOST,
+        # CONTROL_ENDPOINT, and INTERNAL_URL; it self-registers with the control plane.
         configure_service "core_proxy_backend" "natforge-core" "$INSTALL_DIR/core_proxy_backend" \
-            "CORE_INTERNAL_PORT=3001\nCORE_CONTROL_PORT=4000\nHTTP_PORT=80\nHTTPS_PORT=443\nPUBLIC_HOST=natforge.com\nNODE_ID=edge-1\nWEBSITE_URL=http://127.0.0.1:3000\nREDIS_URL=redis://127.0.0.1:6379\nJWT_SECRET=CHANGE_ME\nINTERNAL_SECRET=CHANGE_ME\nCF_API_TOKEN=mock_token"
+            "CORE_INTERNAL_PORT=3001\nCORE_CONTROL_PORT=4000\nHTTP_PORT=80\nHTTPS_PORT=443\nPUBLIC_HOST=natforge.com\nNODE_ID=edge-1\nNODE_NAME=Primary\nNODE_REGION=Default\nCONTROL_ENDPOINT=natforge.com:4000\nINTERNAL_URL=http://127.0.0.1:3001\nPUBLIC_PORT_MIN=20000\nPUBLIC_PORT_MAX=20100\nGEOIP_DB=/etc/natforge/GeoLite2-Country.mmdb\nWEBSITE_URL=http://127.0.0.1:3000\nREDIS_URL=redis://127.0.0.1:6379\nJWT_SECRET=CHANGE_ME\nINTERNAL_SECRET=CHANGE_ME\nCF_API_TOKEN=mock_token"
         ;;
     "node")
-        if [[ -z "$NODE_MODE" ]]; then err "Node deployment requires --mode <service-host | ip-host>"; fi
+        # The agent runs in Service Host mode; it learns the node to connect to from
+        # the reservation, so no --tunnel-server is needed in production.
         configure_service "proxy_node" "natforge-agent" \
-            "$INSTALL_DIR/proxy_node $NODE_MODE --control-plane https://natforge.com --tunnel-server natforge.com:4000" ""
+            "$INSTALL_DIR/proxy_node service-host --control-plane https://natforge.com" ""
         ;;
     *)
         err "Invalid component. Use: website, core, or node."
