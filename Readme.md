@@ -1,25 +1,25 @@
-# THESIS PROPOSAL — NatForge
+# NatForge
 
-**Title:** Design and Implementation of a Hybrid Reverse Proxy and P2P Tunneling Platform with Decentralized Edge Nodes
+**Title:** Design and Implementation of a Multi-Region Reverse-Proxy and Tunneling Platform for NAT/CGNAT Traversal
 
 **Platform name:** NatForge (`natforge.com`)
 
-> **Implementation status:** the platform described below is implemented and tested. The reverse tunnel (yamux-multiplexed TCP relay), Argon2+JWT authentication, the RFC 8628 device flow, the role-aware dashboards, admin abuse controls, and the IP-host edge relay all work end-to-end (see `Thesis.md`, Chapter 5). WireGuard encapsulation, kernel eBPF drops, and direct UDP hole punching are designed and simulated/deferred as documented.
+> **Implementation status:** the complete platform is implemented and tested end-to-end (see `Thesis.md`, Chapter 5 — `scripts/e2e.sh`, 13 assertions, all passing). Working: **subdomain routing** so friends connect via `sub.natforge.com` — HTTP `Host` routing and HTTPS **TLS-SNI passthrough** on shared ports, plus dedicated TCP ports for raw protocols; **multiple routes per tunnel** over one yamux session (per-stream binary preamble); a **multi-region** data plane (self-registering nodes; users pick a region per tunnel); **per-tunnel observability** (bandwidth series + a connection log); **geo-blocking** (MaxMind GeoLite2; platform-wide + per-tunnel); a **real TLS** agent↔core channel with self-signed certs pinned by fingerprint; Argon2+JWT auth and the RFC 8628 device flow; **PostgreSQL + Redis persistence** with idempotent reservation, a per-region port-pool allocator, and a reconciliation sweep; role-aware dashboards; and admin abuse controls. Users get a custom-or-random subdomain and optional per-route labels for any TCP server; admins manage regions and get a network overview plus a **Users** page (per-user tunnels, agent IP, traffic). Verified scenarios include two users sharing one port by subdomain and full state surviving a both-planes restart. Run the datastores with `docker compose up -d`. Direct UDP hole punching is deferred as documented; kernel eBPF/XDP mitigation is noted as a production enhancement (the implemented guard is userspace).
 
 **Author:** Evangelos Leivaditis
 
-**Language/Tech Stack:** Rust, Tokio, HTML/Bootstrap, PostgreSQL, Redis
+**Language/Tech Stack:** Rust, Tokio, Axum, yamux, rustls, HTML/CSS/JS, PostgreSQL, Redis
 
-**Architecture:** Client-Server with P2P NAT-Traversal Extension
+**Architecture:** Centralized control plane + distributed multi-region data plane (direct-P2P extension as future work)
 
 ## 1. Abstract
 
-This research proposes the development of a high-performance, hybrid reverse proxy and tunneling platform designed to expose local network services (e.g., game servers behind NAT/CGNAT) to the public internet without requiring port forwarding. Unlike traditional centralized solutions, this platform introduces a dual-architecture model:
+This research develops a high-performance, multi-region reverse proxy and tunneling platform designed to expose local network services (e.g., game servers behind NAT/CGNAT) to the public internet without requiring port forwarding. The platform separates concerns into:
 
-- **A Centralized Core:** A high-throughput control plane written in Rust that handles authentication, signaling, and fallback routing.
-- **A Decentralized "Edge" Layer & P2P Engine:** A system that establishes Direct Connections between users when possible, or routes traffic through volunteer residential IPs ("Edge Nodes") to bypass datacenter IP blacklists and offload centralized bandwidth.
+- **A Centralized Control Plane:** A Rust/Axum service that handles authentication, signaling, tunnel reservation, the region (node) registry, per-tunnel observability, geo-blocking policy, and the management UI.
+- **A Distributed, Multi-Region Data Plane:** One or more Rust relay nodes, each in a different region, that multiplex each tunnel over a single TLS-encrypted connection to the agent. Nodes self-register; users choose which region hosts their tunnel; direct peer-to-peer establishment is identified as future work.
 
-Crucially, to protect the privacy of Edge Nodes and ensure high throughput, all relaying is done entirely in-memory via asynchronous buffers, mitigating passive data retention. The system features a centralized web management interface and a unified Rust-based agent, allowing users to seamlessly switch between hosting local services and providing network infrastructure.
+Crucially, to ensure high throughput and minimize data retention, all relaying is done entirely in-memory via asynchronous buffers — only connection *metadata* (not payload) is logged. The system features a centralized web management interface and a unified Rust-based agent for hosting local services.
 
 ## 2. Problem Statement & Motivation
 
@@ -29,11 +29,10 @@ Crucially, to protect the privacy of Edge Nodes and ensure high throughput, all 
 
 ## 3. Core Use Cases & Actor Roles
 
-The system serves three distinct user roles, managed through a unified Bootstrap-based Web UI:
+The system serves two user roles, managed through a unified custom Web UI:
 
-- **The Service Host (Standard User):** A user who wants to host a game server (e.g., Minecraft) from their home PC. They are assigned a random subdomain (e.g., `duck-main.natforge.com`) and up to 2 specific public ports.
-- **The IP Host / Edge Node (Superuser):** A user with a public, non-CGNAT IP who volunteers to share their network. They act as a residential relay for other users, managing their bandwidth limits via the web dashboard.
-- **The Administrator:** Oversees the entire network, monitors active tunnels, manages global bandwidth, and handles abuse/banning (including region blocking for specific geolocations for both hosts and IP addresses) via an Admin Panel.
+- **The Service Host (Standard User):** A user hosting any TCP server from their home PC — a game server (Minecraft, Terraria, GTA-MTA, …), a website, an API, SSH. They pick a subdomain (e.g. `duck-main.natforge.com`) or get a random one, choose a **region**, add per-port routes with optional labels, and reach HTTP/HTTPS by subdomain or raw TCP on a dedicated port. A per-tunnel detail panel shows the tunnel's **location, logging** (bandwidth + recent connections), and **blocking** (per-tunnel country blocks). (UDP-only games are not yet supported.)
+- **The Administrator:** Oversees the network, monitors active tunnels and users, manages the **regions (nodes)** (rename/enable/disable/remove self-registered nodes), and handles abuse via globally blocked ports and platform-wide **geo-blocking** by country.
 
 ## 4. Technical Architecture
 
@@ -41,71 +40,92 @@ The system serves three distinct user roles, managed through a unified Bootstrap
 
 ### A. The Data Plane (The Rust Tunnel Engine)
 
-The core high-throughput networking is isolated in the `core_proxy_backend` application, written entirely in Rust for deterministic memory safety and predictable latency [3]. 
+The core high-throughput networking is isolated in the `core_proxy_backend` application, written entirely in Rust for deterministic memory safety and predictable latency [3].
 
-- **WireGuard & Multiplexing Integrations:** Utilizes `boringtun` (WireGuard in userspace) combined with `yamux` to allow a high-speed, cryptographically verified UDP tunnel to carry multiple simultaneous data streams [10]. Each user is deterministically allocated **1 specific TCP and UDP port** mapped natively to the Global Anycast pool.
-- **DDoS Mitigation (eBPF & Heuristics):** To protect volunteer nodes and the central infrastructure, the core engine tracks packet ingress. If volumetric floods (e.g., >10,000 packets/sec per IP) are detected, simulated eBPF firewall configurations seamlessly drop malicious payloads before they saturate the multiplexed buffer tunnels [11].
-- **DNS SRV & Anycast Routing:** The `core_proxy` interacts securely with generalized DNS providers (e.g., Cloudflare APIs). Upon tunnel allocation, it dynamically provisions DNS SRV records (e.g., `_minecraft._tcp.duck-main`), mapping global gamers directly into the high-speed Node's designated TCP/UDP bounds, bypassing CGNAT transparently.
-- **Bandwidth Tracking & Economics:** TCP/UDP byte lengths are tracked natively within the connection loops. This byte data is continually offloaded securely to the website server for accurate database accumulation and host compensation mapping.
+- **TLS + Multiplexing:** Each agent's single outbound connection is wrapped in **real TLS** (`tokio-rustls`, self-signed cert pinned by SHA-256 fingerprint) and upgraded to a **`yamux`** session carrying many simultaneous streams. HTTP/HTTPS routes share `:80`/`:443` (Host/SNI routing); each raw-TCP route gets a dedicated public port from that node's pool.
+- **Multi-region nodes:** Each node self-registers with the control plane (its host, port range, and cert fingerprint), serves its own wildcard apex, and owns its own port pool. Users pick a region; a tunnel records its `node_id` so reconnection stays on the same node.
+- **Abuse mitigation (userspace):** A per-IP connection-rate guard blackholes sources that exceed a threshold (time-bounded), shedding load before it reaches the multiplexer. This is honest userspace mitigation; a kernel eBPF/XDP drop path is noted as a production enhancement [11], not implemented.
+- **Geo-blocking:** A MaxMind GeoLite2 lookup resolves each connection's country; platform-wide (admin) and per-tunnel (owner) block lists are enforced at the node and recorded in the connection log.
+- **DNS SRV provisioning:** Upon a tcp route coming up, the `core_proxy` provisions a per-tunnel `_minecraft._tcp.<sub>` SRV record via the Cloudflare v4 API (live with `CF_API_TOKEN`, logged in dev) and removes it on teardown.
+- **Per-tunnel observability:** Byte counts are tracked with atomics and reported every 5s; each closed (or geo-blocked) connection contributes a metadata-only row (source, country, bytes, duration) to the per-tunnel connection log.
 
 ### B. The User Platform (`website_backend` & `frontend`)
 
 - **API Server & Authentication:** The `website_backend` isolates user data from the high-throughput network buffers. Built around Axum, it manages robust Web UI accounts utilizing the **Argon2** cryptographic hashing algorithms and JWT mappings. 
-- **State Management & Persistence:** Redis for in-memory tracking; PostgreSQL for user accounts, logs, and billing/bandwidth quotas (mapped to the Core Proxy). The full API structures for account controls and region blocking are detailed in `/website_backend/DOCUMENTATION.md`.
-- **Web Interface (UI):** Built with simple, lightweight vanilla HTML, JavaScript, and Bootstrap 5 to ensure a clean, responsive design. Refactored into a professional workspace separating `views`, `api`, and `assets`. Contains the Admin, Service Host, and IP Host Superuser panels dynamically interacting with the Axum REST endpoints. The structural mappings for the UI are detailed in `/frontend/DOCUMENTATION.md`.
+- **State Management & Persistence:** Redis for ephemeral state (device codes, liveness mirror); PostgreSQL for users, tunnels/routes, the region registry, bandwidth, connection logs, geo-block lists, and the per-region port allocator. The full API is detailed in `/website_backend/DOCUMENTATION.md`.
+- **Web Interface (UI):** Vanilla HTML/JavaScript with a **custom, framework-free design system**. A dark, layered **Discord-style** palette, the **brand teal (`#40b8c0`) sampled from the `natforge_flake` logo** as the accent, and **Azure-style components** (Segoe UI, low-radius rectangular controls, flat fills, crisp focus rings). **No emoji** — all icons are inline stroke-SVGs matching the hexagonal logo. The workspace separates `views`, `api`, and `assets`; the Service Host (region-aware request builder + per-tunnel detail panel) and Admin (regions, blocks, users) panels interact with the Axum REST endpoints. Details in `/frontend/DOCUMENTATION.md`.
 
-### C. System Flow & Configuration (The Ubuntu Rust Script)
+### C. System Flow & Configuration
 
-The client-side is driven by a single compiled Rust binary deployed via an Ubuntu script, serving both host types:
+The client-side is a single compiled Rust binary deployed via the install script:
 
-- **Initialization:** When run, the CLI asks the user to select their role: Service Host or IP Host.
-- **Device Authorization Flow:** To securely link the headless CLI to the web account, the system utilizes the OAuth 2.0 Device Authorization Grant flow (RFC 8628) [7]. The CLI securely outputs: *"Please go to natforge.com/device and enter code XYZ."*
-- **Execution (Service Host):** Once authenticated, the server allocates a subdomain (e.g., `duck-main`) and 2 ports. The client connects to the central server, and the daemon is registered to auto-start on PC boot via systemd.
-- **Execution (IP Host):** The client registers its public IP with the central control plane. The user is upgraded to a "Superuser" in the web UI, where they can configure maximum allowed bandwidth and toggle their active status.
+- **Device Authorization Flow:** To securely link the headless CLI to the web account, the system uses the OAuth 2.0 Device Authorization Grant flow (RFC 8628) [7]. The CLI outputs: *"Please go to natforge.com/device and enter code XYZ."* (A pre-issued `--token` or `--email/--password` also work for non-interactive use.)
+- **Execution (Service Host):** Once authenticated, the user reserves a subdomain, a region, and a set of routes; the agent connects to the chosen region's node over a pinned-TLS channel, and the daemon can be registered to auto-start on boot via systemd.
+- **Adding a region:** An operator deploys another `core_proxy_backend` with a distinct `NODE_ID`/`PUBLIC_HOST` pointed at the same control plane; it self-registers and appears in the admin panel and every user's region dropdown.
 
 ## 5. MoSCoW Analysis
 
-### Must Have
-- **Unified Rust CLI:** A single agent capable of running in both "Service Host" and "IP Host" modes, with auto-start daemon registration.
-- **Device Authorization Flow:** Secure headless login mapping via a temporary string and web endpoint.
-- **Dynamic Routing:** The central server correctly routes requests like `duck-main.natforge.com:25565` down the active Yamux tunnel.
-- **Web Dashboards (Bootstrap):** Separate functional panels for Admin, User, and IP Host management.
-- **Basic Security:** TLS termination at the web-server level for the UI and API.
+### Must Have *(done)*
+- **Unified Rust CLI:** A single Service-Host agent, with auto-start daemon registration.
+- **Device Authorization Flow:** Secure headless login via a temporary code and web endpoint.
+- **Dynamic Routing:** The node correctly routes `duck-main.natforge.com` (Host/SNI) and dedicated TCP ports down the active yamux tunnel.
+- **Web Dashboards:** Functional Service-Host and Admin panels wired to the REST API.
+- **Persistence:** PostgreSQL + Redis with idempotent reservation; full state survives a restart.
 
-### Should Have
-- **P2P Direct Connection (Hole Punching):** Attempt UDP hole punching before falling back to server-relayed traffic.
-- **Bandwidth Management:** IP Hosts must be able to set and enforce hard data limits via their web panel to prevent ISP overage charges.
-- **Auto-Reconnection:** Client gracefully handles internet drops and reconnects without losing the allocated subdomain mapping.
+### Should Have *(done)*
+- **Multi-region data plane:** Self-registering nodes; users pick a region per tunnel.
+- **Per-tunnel observability:** Bandwidth series + a per-connection log in the dashboard.
+- **Geo-blocking:** MaxMind GeoLite2; platform-wide (admin, also gates login) and per-tunnel (owner).
+- **Encrypted control channel:** TLS with self-signed certs pinned by fingerprint.
+- **Auto-Reconnection:** Client reconnects without losing its subdomain, region, or ports.
 
-### Could Have
-- **Decentralized Rewards:** A database ledger crediting IP Hosts for relaying traffic, potentially redeemable for premium accounts.
-- **Geo-Routing:** Allowing Service Hosts to dynamically request egress via an IP Host situated in a specific country.
-- **Custom Domains:** Allowing users to CNAME their own domain (e.g., `play.mygame.com`) to the platform.
+### Could Have *(future)*
+- **P2P Direct Connection (Hole Punching):** Attempt UDP hole punching before falling back to a regional relay.
+- **Cross-region tunnel migration:** Move a live tunnel between regions without losing its subdomain.
+- **Custom Domains:** Allow users to CNAME their own domain (e.g., `play.mygame.com`) to a tunnel.
 
 ### Won't Have
-- **Desktop GUI Application:** The local agent will remain a CLI/Background Daemon; all visual management is isolated to the centralized website.
-- **Enterprise DDoS Mitigation:** Advanced Layer 7 attack scrubbing and WAF policies are strictly out of scope.
+- **Desktop GUI Application:** The local agent remains a CLI/Background Daemon; all visual management is on the website.
+- **Enterprise DDoS Mitigation:** Advanced Layer-7 attack scrubbing and WAF policies are out of scope.
 
 ## 6. Demonstration Setup (Live Defense Requirements)
 
 The thesis defense will feature a multi-device live demonstration:
-- **Infrastructure:** 1 Cloud VM (Ubuntu 22.04) running the Axum API, Bootstrap Web UI, PostgreSQL, and Redis.
-- **Scenario A (Direct/Relay Game Hosting):** Start a Minecraft server on Laptop A. Run the CLI in Service Host mode. Connect to the provided `duck-main.natforge.com` via Laptop B over a 4G hotspot.
-- **Scenario B (P2P/Edge Node Routing):** Run the CLI in IP Host mode on Laptop C. Configure Laptop A to route through Laptop C. Verify the IP change using a terminal request to an IP-checking service (such as `curl ifconfig.me`), proving the decentralized relay functions correctly.
+- **Infrastructure:** A Cloud VM (Ubuntu 22.04) running the Axum API, the Web UI, PostgreSQL, and Redis, plus a data-plane node; optionally a **second VM in another region** running a second node.
+- **Scenario A (Relay Game Hosting):** Start a Minecraft server on Laptop A. Run the CLI in Service Host mode. Connect to the provided `duck-main.natforge.com` via Laptop B over a 4G hotspot.
+- **Scenario B (Region choice + observability + geo-block):** Reserve a tunnel in the second region and connect to it; watch the per-tunnel **bandwidth and connection log** populate in the dashboard; add a country to the tunnel's **block list** and confirm connections from it are refused (and logged as `blocked`). Confirm the control channel is real TLS (`openssl s_client` to `:4000` presents the pinned cert).
 
 ## 7. Security & Ethical Considerations
 
-- **Traffic Encryption:** End-to-end encryption of the tunnel to prevent Man-in-the-Middle attacks between the proxy relay and the origin server.
-- **Abuse Prevention & Liability Mitigation:** Because "IP Hosts" are allowing strangers to use their public IP, severe edge-case safeguards are required. The central server will explicitly block traffic on universally abused ports, including SMTP (Ports 25, 465) to prevent email spam. Strict adherence to legal compliance frameworks and implementing Terms of Service comparable to those governing Tor exit nodes drastically limits the abuse liability placed upon residential node operators [8].
-- **Stateful Authentication:** JWT (JSON Web Tokens) generated during the device-login phase will be used continually to authorize tunnel creation and prevent hijacking, following RFC 7519 standards [9].
+- **Traffic Encryption:** The agent↔core control channel runs over real TLS (self-signed cert pinned by fingerprint), so every multiplexed stream is authenticated and confidential between the agent and the node; HTTPS routes additionally use SNI **passthrough**, so the node never decrypts origin traffic.
+- **Abuse Prevention:** The control plane blocks universally abused ports by default (SMTP 25/465/587) to prevent spam, and supports **geo-blocking** by country — platform-wide (also gating login/registration) and per-tunnel. A userspace connection-rate guard sheds volumetric floods.
+- **Privacy:** Relaying is in-memory only; no payload is ever written to disk. Only connection *metadata* (source, country, bytes, duration) is logged, visible solely to the tunnel's owner and admins. A Terms-of-Service "mere conduit" posture suits this no-inspection, no-retention design [8].
+- **Stateful Authentication:** JWTs from the device-login phase authorize tunnel creation and prevent hijacking, following RFC 7519 [9]; scoped tunnel tokens bind a single subdomain.
 
 ## 8. Project Structure and Documentation
 
 This platform is split into three primary working directories, each requiring its own standalone `DOCUMENTATION.md` file to detail specific dependencies, endpoints, and CLI arguments:
 
-1. **`/frontend`**: The centralized Web UI dashboards (Admin, Service User, and Superuser panels). This component will be built out first to establish a solid specification and user flow for the Rust networking agent.
-2. **`/backend`**: The Rust Axum REST API, signaling server, and database state manager.
-3. **`/proxy_node`**: The unified Rust daemon (CLI script) deployed on standard user machines and residential IP nodes.
+1. **`/frontend`**: The Web UI dashboards (Service Host and Admin panels).
+2. **`/website_backend`**: The Rust Axum control plane — REST API, auth/signaling, region registry, and database state manager.
+3. **`/core_proxy_backend`**: The Rust data-plane node — TLS+yamux relay, shared Host/SNI routers, dedicated TCP ports, geo-blocking.
+4. **`/proxy_node`**: The unified Rust Service-Host agent (CLI/daemon) deployed on user machines.
+
+---
+
+## 8.5 Deploying the Domain with Cloudflare
+
+NatForge's routing (one shared `:80`/`:443` demultiplexed by subdomain, plus dedicated TCP ports) fits Cloudflare DNS perfectly: **one wildcard record serves unlimited tunnel subdomains** — no per-subdomain record and no practical limit.
+
+1. **Delegate** `natforge.com` to Cloudflare (set the registrar nameservers to the two Cloudflare provides).
+2. **Records** (the core proxy runs on a cloud VM with a static public IP — it is the public endpoint and cannot itself be behind CGNAT):
+   - `A natforge.com → <VM IP>` — the dashboard/apex (may be Cloudflare-proxied/orange).
+   - `A *.natforge.com → <VM IP>` — **DNS-only (grey cloud)**; this single record resolves every tunnel subdomain, which the core then routes by `Host`/SNI.
+   - Open the VM firewall for `80`, `443`, `4000` (agent control), and `20000–20100` (TCP pool).
+3. **Keep the wildcard grey-cloud (DNS-only).** Cloudflare's orange-cloud proxy *terminates TLS* (breaking NatForge's SNI passthrough) and does **not** carry arbitrary TCP ports (e.g. `25565`) without **Spectrum** (paid). Grey-cloud passes both straight to the origin. The platform does its own routing/relay/DDoS, so it does not need Cloudflare's proxy; orange-cloud only the apex if you want CDN/WAF on the dashboard.
+4. **Clean game addresses (optional):** for tcp routes the core's DNS module (a real Rust Cloudflare-v4 client) provisions a per-tunnel `_minecraft._tcp.<sub>` **SRV** record on tunnel-up and removes it on teardown, so players can enter just `<sub>.natforge.com`. This runs the live API when `CF_API_TOKEN` is set and logs in local dev; without SRV, players use `<sub>.natforge.com:<port>`.
+
+**Bottom line:** Cloudflare handles all the subdomains with no issue — a single grey-cloud wildcard is the ideal fit for this architecture. The only constraints are deliberate: keep the wildcard DNS-only so SNI passthrough and non-standard TCP ports work, and use Spectrum if you ever want proxied raw-TCP. Full detail in `Thesis.md`, Appendix D.
 
 ---
 
