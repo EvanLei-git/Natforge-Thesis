@@ -14,7 +14,7 @@ use natforge_proto::RouteMode;
 use crate::service_host::RouteSpec;
 
 #[derive(Parser)]
-#[command(name = "proxy_node")]
+#[command(name = "natforge")]
 #[command(about = "NatForge data-plane agent (Service Host)", long_about = None)]
 struct Cli {
     #[command(subcommand)]

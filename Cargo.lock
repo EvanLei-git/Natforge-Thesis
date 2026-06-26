@@ -1621,6 +1621,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "natforge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures-util",
+ "natforge-proto",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "yamux",
+]
+
+[[package]]
 name = "natforge-proto"
 version = "0.1.0"
 dependencies = [
@@ -1937,27 +1958,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "proxy_node"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "futures-util",
- "natforge-proto",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "yamux",
 ]
 
 [[package]]

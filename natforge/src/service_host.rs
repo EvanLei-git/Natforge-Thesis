@@ -139,14 +139,25 @@ pub async fn run(
         let target = tunnel_server.unwrap_or(reservation.control_endpoint.as_str()).to_string();
         match connect_and_serve(&target, &reservation).await {
             Ok(()) => warn!("tunnel session ended; reconnecting in 3s…"),
-            Err(e) => {
-                warn!("tunnel error ({e}); re-reserving and reconnecting in 3s…");
-                if let Ok(r) = reserve(control_plane, session_token, &specs, region).await {
-                    reservation = r;
-                }
-            }
+            Err(e) => warn!("tunnel error ({e}); reconnecting in 3s…"),
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
+
+        // Refresh the reservation before every reconnect so control-plane edits —
+        // a new subdomain, route labels, or a re-minted token — take effect on a
+        // live tunnel. reserve() is idempotent by route signature: it returns the
+        // SAME tunnel (same dedicated ports) with the current subdomain and a fresh
+        // token, or leaves us on the existing reservation if the control plane is
+        // momentarily unreachable.
+        match reserve(control_plane, session_token, &specs, region).await {
+            Ok(r) => {
+                if r.subdomain != reservation.subdomain {
+                    info!("subdomain changed to '{}' ({})", r.subdomain, r.full_host);
+                }
+                reservation = r;
+            }
+            Err(e) => warn!("re-reserve failed ({e}); retrying with the existing reservation"),
+        }
     }
 }
 
