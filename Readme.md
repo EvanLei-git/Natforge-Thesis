@@ -78,6 +78,9 @@ The client-side is a single compiled Rust binary deployed via the install script
 - **Geo-blocking:** MaxMind GeoLite2; platform-wide (admin, also gates login) and per-tunnel (owner).
 - **Encrypted control channel:** TLS with self-signed certs pinned by fingerprint.
 - **Auto-Reconnection:** Client reconnects without losing its subdomain, region, or ports.
+- **Tunnel lifecycle:** Separate **Stop** (pause but keep the subdomain + ports, restartable) and **Delete** (remove and free ports); tunnels are renameable.
+- **Self-service profiles:** Users change their own display name, email, and password from the dashboard.
+- **Moderation:** Admins can rename/delete any tunnel, and ban/unban or delete a user (banning drops their live tunnels and blocks login).
 
 ### Could Have *(future)*
 - **P2P Direct Connection (Hole Punching):** Attempt UDP hole punching before falling back to a regional relay.
@@ -100,7 +103,8 @@ The thesis defense will feature a multi-device live demonstration:
 - **Traffic Encryption:** The agent↔core control channel runs over real TLS (self-signed cert pinned by fingerprint), so every multiplexed stream is authenticated and confidential between the agent and the node; HTTPS routes additionally use SNI **passthrough**, so the node never decrypts origin traffic.
 - **Abuse Prevention:** The control plane blocks universally abused ports by default (SMTP 25/465/587) to prevent spam, and supports **geo-blocking** by country — platform-wide (also gating login/registration) and per-tunnel. A userspace connection-rate guard sheds volumetric floods.
 - **Privacy:** Relaying is in-memory only; no payload is ever written to disk. Only connection *metadata* (source, country, bytes, duration) is logged, visible solely to the tunnel's owner and admins. A Terms-of-Service "mere conduit" posture suits this no-inspection, no-retention design [8].
-- **Stateful Authentication:** JWTs from the device-login phase authorize tunnel creation and prevent hijacking, following RFC 7519 [9]; scoped tunnel tokens bind a single subdomain.
+- **Stateful Authentication:** JWTs from the device-login phase authorize tunnel creation and prevent hijacking, following RFC 7519 [9]; scoped tunnel tokens bind a single subdomain. Banned accounts are refused at login and cannot reserve tunnels.
+- **Output Encoding (XSS):** The dashboards render user-controlled strings (emails, tunnel names, region labels) only through context-aware encoders — `escapeHtml` for element text and `escapeAttr` (`JSON.stringify` + HTML-encode) for inline event-handler attributes — closing a stored-XSS vector where a crafted tunnel name could otherwise execute in an admin's session.
 
 ## 8. Project Structure and Documentation
 
@@ -109,7 +113,7 @@ This platform is split into three primary working directories, each requiring it
 1. **`/frontend`**: The Web UI dashboards (Service Host and Admin panels).
 2. **`/website_backend`**: The Rust Axum control plane — REST API, auth/signaling, region registry, and database state manager.
 3. **`/core_proxy_backend`**: The Rust data-plane node — TLS+yamux relay, shared Host/SNI routers, dedicated TCP ports, geo-blocking.
-4. **`/proxy_node`**: The unified Rust Service-Host agent (CLI/daemon) deployed on user machines.
+4. **`/natforge`**: The unified Rust Service-Host agent (CLI/daemon) deployed on user machines.
 
 ---
 
