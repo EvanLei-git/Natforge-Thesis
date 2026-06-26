@@ -75,8 +75,36 @@ async fn serve_http(state: Arc<CoreState>, mut inbound: TcpStream, peer: SocketA
             return;
         }
     };
+    // The bare apex (and `www.`) is the control-plane dashboard, not a tunnel:
+    // forward those to the website backend instead of subdomain-routing them.
+    let hostname = host.split(':').next().unwrap_or(&host).trim().trim_end_matches('.').to_ascii_lowercase();
+    let apex = state.config.public_host.to_ascii_lowercase();
+    if hostname == apex || hostname == format!("www.{apex}") {
+        proxy_to_dashboard(inbound, buf, &state.config.dashboard_addr).await;
+        return;
+    }
     let sub = subdomain_of(&host);
     route_and_splice(state, inbound, peer, buf, sub, RouteMode::Http).await;
+}
+
+/// Forward a plain-HTTP connection (the apex / www host) to the local dashboard
+/// (`website_backend`). The bytes already peeked for the Host header are replayed
+/// first, then the streams are spliced — a simple L4 HTTP proxy, no preamble/yamux.
+async fn proxy_to_dashboard(mut inbound: TcpStream, peeked: Vec<u8>, upstream: &str) {
+    let mut up = match TcpStream::connect(upstream).await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("dashboard upstream {upstream} unreachable: {e}");
+            let _ = inbound
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 17\r\n\r\ndashboard offline")
+                .await;
+            return;
+        }
+    };
+    if up.write_all(&peeked).await.is_err() {
+        return;
+    }
+    let _ = copy_bidirectional(&mut inbound, &mut up).await;
 }
 
 /// Find the `Host:` header value in raw request bytes (case-insensitive).

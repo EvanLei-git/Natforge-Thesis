@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NatForge — Tunnel anything, no port forwarding</title>
+    <link rel="icon" href="../assets/img/natforge_flake.ico">
+    <link href="../assets/css/style.css" rel="stylesheet">
+    <style>
+        .lp { max-width: 980px; margin: 0 auto; padding: 0 20px; }
+        .lp-nav { display:flex; align-items:center; justify-content:space-between; padding:18px 0; }
+        .lp-nav .brand { display:flex; align-items:center; gap:10px; font-weight:600; font-size:1.05rem; }
+        .lp-nav .brand img { width:30px; height:30px; }
+        .lp-nav .actions { display:flex; gap:10px; }
+        .hero { text-align:center; padding:64px 0 40px; }
+        .hero img { width:84px; height:84px; margin-bottom:18px;
+            filter: drop-shadow(0 0 22px var(--brand-tint)); }
+        .hero h1 { font-size:2.6rem; line-height:1.1; margin:0 0 14px;
+            background:linear-gradient(180deg,var(--text),var(--text-muted));
+            -webkit-background-clip:text; background-clip:text; color:transparent; }
+        .hero h1 .accent { color:var(--brand); -webkit-text-fill-color:var(--brand); }
+        .hero p.lead { font-size:1.15rem; color:var(--text-muted); max-width:660px; margin:0 auto 10px; }
+        .hero .ex { font-family:var(--mono); color:var(--brand-bright); background:var(--brand-tint-2);
+            border:1px solid var(--border); border-radius:var(--radius-sm); padding:3px 8px; }
+        .hero .cta { margin-top:28px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+        .hero .btn { padding:11px 22px; font-size:.98rem; }
+        .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin:24px 0; }
+        .feat { background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius); padding:20px; }
+        .feat .ic { color:var(--brand); display:inline-flex; margin-bottom:10px; }
+        .feat .ic svg { width:26px; height:26px; }
+        .feat h3 { margin:0 0 6px; font-size:1.02rem; }
+        .feat p { margin:0; color:var(--text-muted); font-size:.92rem; line-height:1.5; }
+        .section-title { text-align:center; margin:48px 0 6px; font-size:1.5rem; }
+        .section-sub { text-align:center; color:var(--text-faint); margin:0 0 8px; }
+        .steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; margin:24px 0; }
+        .step { padding:20px; }
+        .step .num { display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px;
+            border-radius:50%; background:var(--brand); color:var(--on-brand); font-weight:700; margin-bottom:10px; }
+        .step h3 { margin:0 0 6px; font-size:1rem; }
+        .step p { margin:0; color:var(--text-muted); font-size:.92rem; line-height:1.5; }
+        .lp-foot { text-align:center; color:var(--text-faint); font-size:.85rem; padding:40px 0 28px; border-top:1px solid var(--border); margin-top:48px; }
+        .lp-foot a { color:var(--brand); text-decoration:none; }
+    </style>
+</head>
+<body>
+    <div class="lp">
+        <nav class="lp-nav">
+            <div class="brand"><img src="../assets/img/natforge_flake.png" alt="">NatForge</div>
+            <div class="actions">
+                <a href="index.html" class="btn btn-secondary btn-sm">Sign in</a>
+                <a href="index.html" class="btn btn-primary btn-sm">Get started</a>
+            </div>
+        </nav>
+
+        <header class="hero">
+            <img src="../assets/img/natforge_flake.png" alt="NatForge">
+            <h1>Host anything from home.<br><span class="accent">No port forwarding.</span></h1>
+            <p class="lead">
+                NatForge exposes a server running on your own machine — a game server, a website, an API, SSH —
+                to the public internet, even behind NAT or CGNAT. No router config, no static IP, no VPS.
+            </p>
+            <p class="lead">Your friends just open <span class="ex">your-name.natforge.com</span>.</p>
+            <div class="cta">
+                <a href="index.html" class="btn btn-primary">Create your account</a>
+                <a href="index.html" class="btn btn-secondary">Sign in</a>
+            </div>
+        </header>
+
+        <div class="grid">
+            <div class="feat">
+                <span class="ic" data-icon="bolt"></span>
+                <h3>Works behind CGNAT</h3>
+                <p>Your machine makes one outbound connection — so it works behind any NAT or carrier-grade NAT, with nothing to open on your router.</p>
+            </div>
+            <div class="feat">
+                <span class="ic" data-icon="globe"></span>
+                <h3>Your own subdomain</h3>
+                <p>Reach web apps over HTTP/HTTPS at <code>name.natforge.com</code>, or get a dedicated public port for raw-TCP servers like Minecraft.</p>
+            </div>
+            <div class="feat">
+                <span class="ic" data-icon="server"></span>
+                <h3>Pick your region</h3>
+                <p>Choose which regional server hosts your tunnel, so traffic takes the shortest path to your audience.</p>
+            </div>
+            <div class="feat">
+                <span class="ic" data-icon="shield"></span>
+                <h3>Encrypted &amp; private</h3>
+                <p>The control channel is TLS-encrypted with a pinned certificate, and traffic is relayed in memory only — nothing is written to disk.</p>
+            </div>
+        </div>
+
+        <h2 class="section-title">How it works</h2>
+        <p class="section-sub">From zero to a public link in three steps.</p>
+        <div class="steps">
+            <div class="feat step">
+                <span class="num">1</span>
+                <h3>Reserve a tunnel</h3>
+                <p>Sign in, pick a subdomain and a region, and add a route for each local port you want to expose.</p>
+            </div>
+            <div class="feat step">
+                <span class="num">2</span>
+                <h3>Run the agent</h3>
+                <p>Start the lightweight <code>natforge</code> agent on your machine with the printed command. It connects out and stays linked.</p>
+            </div>
+            <div class="feat step">
+                <span class="num">3</span>
+                <h3>Share the link</h3>
+                <p>Anyone who opens your subdomain (or the dedicated port) reaches your service — relayed through NatForge to your machine.</p>
+            </div>
+        </div>
+
+        <div class="hero" style="padding:8px 0 0">
+            <div class="cta"><a href="index.html" class="btn btn-primary">Get started — it's free</a></div>
+        </div>
+
+        <footer class="lp-foot">
+            NatForge — a reverse-proxy &amp; tunneling platform for NAT/CGNAT traversal.
+            &nbsp;·&nbsp; <a href="index.html">Sign in</a>
+        </footer>
+    </div>
+
+    <script src="../assets/js/app.js"></script>
+</body>
+</html>

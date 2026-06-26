@@ -41,6 +41,9 @@ pub struct Config {
     pub max_header_bytes: usize,
     /// Path to a MaxMind GeoLite2-Country.mmdb (empty = geo-blocking disabled).
     pub geoip_db: String,
+    /// Where the bare apex / www host on :80 is forwarded — the control-plane
+    /// dashboard (`website_backend`). Subdomains remain tunnel routes.
+    pub dashboard_addr: String,
     pub cf_api_token: String,
     pub cf_zone_id: String,
 }
@@ -77,6 +80,7 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(16384),
             geoip_db: env::var("GEOIP_DB").unwrap_or_default(),
+            dashboard_addr: env::var("DASHBOARD_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string()),
             cf_api_token: env::var("CF_API_TOKEN").unwrap_or_else(|_| "mock_token".to_string()),
             cf_zone_id: env::var("CF_ZONE_ID").unwrap_or_else(|_| "mock_zone".to_string()),
         }

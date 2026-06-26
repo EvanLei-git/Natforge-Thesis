@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     let api = routes::api_router(state.clone());
     let serve_dir = ServeDir::new(&config.frontend_dir);
     let app = Router::new()
-        .route("/", get(|| async { Redirect::to("/views/index.html") }))
+        .route("/", get(|| async { Redirect::to("/views/landing.html") }))
         .route("/device", get(|| async { Redirect::to("/views/index.html") }))
         .merge(api)
         .fallback_service(serve_dir)
