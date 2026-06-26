@@ -8,7 +8,7 @@
 #   1. website_backend (control plane): auth, tunnels, region registry, admin, dashboard.
 #   2. core_proxy_backend (data plane, one per region): TLS+yamux relay, per-region
 #      public-port pool, geo-blocking, connection-rate guard. Self-registers on boot.
-#   3. proxy_node (agent): the Service Host agent on end-user machines.
+#   3. natforge (agent): the Service Host agent on end-user machines.
 #
 # Usage:
 #   sudo ./install.sh --component <website | core | node> [--mode service-host]
@@ -102,8 +102,8 @@ case $COMPONENT in
     "node")
         # The agent runs in Service Host mode; it learns the node to connect to from
         # the reservation, so no --tunnel-server is needed in production.
-        configure_service "proxy_node" "natforge-agent" \
-            "$INSTALL_DIR/proxy_node service-host --control-plane https://natforge.com" ""
+        configure_service "natforge" "natforge-agent" \
+            "$INSTALL_DIR/natforge service-host --control-plane https://natforge.com" ""
         ;;
     *)
         err "Invalid component. Use: website, core, or node."

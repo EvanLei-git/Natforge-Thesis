@@ -13,7 +13,7 @@ Everything **you** need to do to run NatForge in production without issues — s
 | `website_backend` | the VM | control plane + dashboard, talks to PostgreSQL + Redis (port 3000, internal) |
 | `core_proxy_backend` | the VM (**static public IP**) | data plane: agent control `:4000`, shared HTTP `:80`, shared HTTPS/SNI `:443`, TCP pool `20000–20100`, internal API `:3001` |
 | PostgreSQL + Redis | the VM (or managed) | durable + ephemeral state |
-| `proxy_node` | **your users' machines** (not the VM) | the agent; can be behind CGNAT |
+| `natforge` | **your users' machines** (not the VM) | the agent; can be behind CGNAT |
 
 The VM is the public endpoint, so it **must have a static public IP** and cannot itself be behind CGNAT.
 
@@ -86,9 +86,9 @@ CF_ZONE_ID=<cloudflare zone id, or 'mock_zone'>
 
 > **Adding a second region:** deploy another core on a new VM with a distinct `NODE_ID`, a `PUBLIC_HOST` like `bg.natforge.com` (whose `*.bg.natforge.com` wildcard points at that VM), and the matching `CONTROL_ENDPOINT`/`INTERNAL_URL`. It self-registers; enable it in the admin panel and it appears in every user's region dropdown.
 
-**Your users' agents** (`proxy_node` on their machines) point at your control plane; the node to connect to comes from the reservation, so no `--tunnel-server` is needed:
+**Your users' agents** (`natforge` on their machines) point at your control plane; the node to connect to comes from the reservation, so no `--tunnel-server` is needed:
 ```bash
-proxy_node service-host --route 25565:tcp \
+natforge service-host --route 25565:tcp \
   --control-plane https://natforge.com \
   --region <node_id>          # optional: pick a region
 ```
@@ -168,7 +168,7 @@ For **unencrypted-origin HTTP tunnels** (a user exposing plain HTTP), if you wan
 cargo build --release
 
 # 2. Install binaries + frontend
-sudo install -m755 target/release/{website_backend,core_proxy_backend,proxy_node} /usr/local/bin/
+sudo install -m755 target/release/{website_backend,core_proxy_backend,natforge} /usr/local/bin/
 sudo mkdir -p /usr/local/share/natforge && sudo cp -r frontend /usr/local/share/natforge/
 
 # 3. Datastores
@@ -195,7 +195,7 @@ sudo systemctl enable --now natforge-website natforge-core
 curl -I https://app.natforge.com/
 
 # register the admin account in the browser, reserve a tunnel, then on a SEPARATE machine:
-proxy_node service-host --route 25565:tcp --control-plane https://natforge.com
+natforge service-host --route 25565:tcp --control-plane https://natforge.com
 #   -> connects (over TLS) to the node named in the reservation; note the public endpoint (natforge.com:200xx)
 
 # a friend connects to the dedicated port, or to <sub>.natforge.com for HTTP/SNI routes
