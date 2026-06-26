@@ -21,6 +21,10 @@ pub struct Config {
     pub redis_url: String,
     /// Path to a MaxMind GeoLite2-Country.mmdb (empty = login geo-blocking off).
     pub geoip_db: String,
+    /// Account that is granted the `admin` role on registration. When set, ONLY
+    /// this email ever auto-becomes admin (no first-come race). Empty = fall back
+    /// to the "first registered account is admin" bootstrap (dev convenience).
+    pub admin_email: String,
 }
 
 impl Config {
@@ -39,6 +43,7 @@ impl Config {
             }),
             redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
             geoip_db: env::var("GEOIP_DB").unwrap_or_default(),
+            admin_email: env::var("ADMIN_EMAIL").unwrap_or_default().trim().to_lowercase(),
         }
     }
 }
