@@ -2,11 +2,11 @@
 //! (see `frontend/DOCUMENTATION.md`) onto its handler. Path params use axum 0.8
 //! `{name}` syntax.
 
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 
 use crate::db::connection::SharedState;
-use crate::handlers::{admin, auth, internal, tunnels};
+use crate::handlers::{admin, auth, internal, tunnels, user};
 
 pub fn api_router(state: SharedState) -> Router {
     Router::new()
@@ -19,7 +19,11 @@ pub fn api_router(state: SharedState) -> Router {
         // --- Service-host tunnels ---
         .route("/api/tunnels", get(tunnels::get_tunnels))
         .route("/api/tunnels/request", post(tunnels::request_tunnel))
-        .route("/api/tunnels/{tunnel_id}", delete(tunnels::stop_tunnel))
+        .route(
+            "/api/tunnels/{tunnel_id}",
+            delete(tunnels::delete_tunnel).patch(tunnels::edit_tunnel),
+        )
+        .route("/api/tunnels/{tunnel_id}/stop", post(tunnels::stop_tunnel))
         .route("/api/tunnels/{tunnel_id}/bandwidth", get(tunnels::tunnel_bandwidth))
         .route("/api/tunnels/{tunnel_id}/logs", get(tunnels::tunnel_logs))
         .route(
@@ -27,6 +31,9 @@ pub fn api_router(state: SharedState) -> Router {
             get(tunnels::get_tunnel_region_blocks).put(tunnels::set_tunnel_region_blocks),
         )
         .route("/api/regions", get(tunnels::list_regions))
+        // --- User self-service ---
+        .route("/api/user/profile", get(user::get_profile).put(user::update_profile))
+        .route("/api/user/password", put(user::change_password))
         // --- Admin ---
         .route(
             "/api/admin/region_blocks",
@@ -44,10 +51,14 @@ pub fn api_router(state: SharedState) -> Router {
         .route("/api/admin/stats", get(admin::network_stats))
         .route("/api/admin/tunnels", get(admin::all_tunnels))
         .route("/api/admin/users", get(admin::list_users))
+        .route(
+            "/api/admin/users/{user_id}",
+            patch(admin::set_user_ban).delete(admin::delete_user),
+        )
         .route("/api/admin/nodes", get(admin::list_nodes))
         .route(
             "/api/admin/nodes/{node_id}",
-            axum::routing::patch(admin::update_node).delete(admin::delete_node),
+            patch(admin::update_node).delete(admin::delete_node),
         )
         // --- Internal (core proxy only) ---
         .route("/api/internal/tunnel_up", post(internal::tunnel_up))

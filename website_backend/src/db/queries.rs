@@ -13,15 +13,27 @@ use natforge_proto::RouteMode;
 // Users
 // --------------------------------------------------------------------------
 
-/// Create a user. The very first account becomes the administrator.
-pub async fn create_user(pg: &PgPool, email: &str, password_hash: &str) -> anyhow::Result<User> {
+/// Create a user and assign its role. If `admin_email` is set, ONLY an account
+/// registering with that (case-insensitive) email becomes `admin` — there is no
+/// first-come race. If `admin_email` is empty, fall back to the bootstrap rule
+/// "the very first account becomes admin" (handy for local dev / tests).
+pub async fn create_user(
+    pg: &PgPool,
+    email: &str,
+    password_hash: &str,
+    admin_email: &str,
+) -> anyhow::Result<User> {
     let user = sqlx::query_as::<_, User>(
         "INSERT INTO users (email, password_hash, role)
-         VALUES ($1, $2, CASE WHEN (SELECT count(*) FROM users) = 0 THEN 'admin' ELSE 'user' END)
-         RETURNING id, email, password_hash, role, max_tunnels, created_at",
+         VALUES ($1, $2, CASE
+             WHEN $3 <> '' AND lower($1) = lower($3) THEN 'admin'
+             WHEN $3 =  '' AND (SELECT count(*) FROM users) = 0 THEN 'admin'
+             ELSE 'user' END)
+         RETURNING id, email, name, password_hash, role, banned, max_tunnels, created_at",
     )
     .bind(email)
     .bind(password_hash)
+    .bind(admin_email)
     .fetch_one(pg)
     .await?;
     Ok(user)
@@ -29,7 +41,7 @@ pub async fn create_user(pg: &PgPool, email: &str, password_hash: &str) -> anyho
 
 pub async fn user_by_email(pg: &PgPool, email: &str) -> anyhow::Result<Option<User>> {
     Ok(sqlx::query_as::<_, User>(
-        "SELECT id, email, password_hash, role, max_tunnels, created_at FROM users WHERE email = $1",
+        "SELECT id, email, name, password_hash, role, banned, max_tunnels, created_at FROM users WHERE email = $1",
     )
     .bind(email)
     .fetch_optional(pg)
@@ -38,7 +50,7 @@ pub async fn user_by_email(pg: &PgPool, email: &str) -> anyhow::Result<Option<Us
 
 pub async fn user_by_id(pg: &PgPool, id: i32) -> anyhow::Result<Option<User>> {
     Ok(sqlx::query_as::<_, User>(
-        "SELECT id, email, password_hash, role, max_tunnels, created_at FROM users WHERE id = $1",
+        "SELECT id, email, name, password_hash, role, banned, max_tunnels, created_at FROM users WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(pg)
@@ -171,7 +183,7 @@ pub async fn reserve_tunnel(
     // Idempotent reuse. FOR UPDATE locks the existing row so a concurrent stop/
     // reconcile cannot delete it between this read and the token mint.
     if let Some(existing) = sqlx::query_as::<_, TunnelRow>(
-        "SELECT id, subdomain, owner_id, route_sig, status, public_host, node_id, agent_ip, created_at, last_seen
+        "SELECT id, subdomain, name, owner_id, route_sig, status, public_host, node_id, agent_ip, created_at, last_seen
          FROM tunnels WHERE owner_id = $1 AND route_sig = $2 FOR UPDATE",
     )
     .bind(owner_id)
@@ -363,6 +375,7 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
             tunnel_id: t.id,
             full_host: format!("{}.{}", t.subdomain, host),
             subdomain: t.subdomain,
+            name: t.name,
             public_host: t.public_host,
             status: t.status,
             agent_ip: t.agent_ip,
@@ -380,7 +393,7 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
 
 pub async fn tunnels_for_owner(pg: &PgPool, owner_id: i32) -> anyhow::Result<Vec<TunnelView>> {
     let tunnels = sqlx::query_as::<_, TunnelRow>(
-        "SELECT id, subdomain, owner_id, route_sig, status, public_host, node_id, agent_ip, created_at, last_seen
+        "SELECT id, subdomain, name, owner_id, route_sig, status, public_host, node_id, agent_ip, created_at, last_seen
          FROM tunnels WHERE owner_id = $1 ORDER BY created_at DESC",
     )
     .bind(owner_id)
@@ -391,7 +404,7 @@ pub async fn tunnels_for_owner(pg: &PgPool, owner_id: i32) -> anyhow::Result<Vec
 
 pub async fn all_tunnels(pg: &PgPool) -> anyhow::Result<Vec<TunnelView>> {
     let tunnels = sqlx::query_as::<_, TunnelRow>(
-        "SELECT id, subdomain, owner_id, route_sig, status, public_host, node_id, agent_ip, created_at, last_seen
+        "SELECT id, subdomain, name, owner_id, route_sig, status, public_host, node_id, agent_ip, created_at, last_seen
          FROM tunnels ORDER BY created_at DESC",
     )
     .fetch_all(pg)
@@ -431,7 +444,7 @@ pub async fn set_tunnel_online(
 /// Aggregated per-user overview for the admin Users page.
 pub async fn users_overview(pg: &PgPool) -> anyhow::Result<Vec<crate::models::UserOverview>> {
     Ok(sqlx::query_as::<_, crate::models::UserOverview>(
-        "SELECT u.id, u.email, u.role, u.created_at,
+        "SELECT u.id, u.email, u.name, u.role, u.banned, u.created_at,
                 (SELECT count(*) FROM tunnels t WHERE t.owner_id = u.id) AS tunnel_count,
                 (SELECT max(last_seen) FROM tunnels t WHERE t.owner_id = u.id) AS last_seen,
                 COALESCE((
@@ -471,6 +484,152 @@ pub async fn delete_tunnel(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<u64> {
         .rows_affected();
     tx.commit().await?;
     Ok(deleted)
+}
+
+/// "Stop" a tunnel: mark it `stopped` but KEEP the row and its reserved ports, so
+/// the user can restart it (reservation reuse gives back the same subdomain/ports).
+/// Stopped tunnels are exempt from the reconciliation sweep. Returns rows affected.
+pub async fn stop_tunnel_keep(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<u64> {
+    Ok(sqlx::query("UPDATE tunnels SET status='stopped', last_seen=now() WHERE id=$1")
+        .bind(tunnel_id)
+        .execute(pg)
+        .await?
+        .rows_affected())
+}
+
+/// Set (or clear, with `None`) a tunnel's display name.
+pub async fn rename_tunnel(pg: &PgPool, tunnel_id: i64, name: Option<&str>) -> anyhow::Result<()> {
+    sqlx::query("UPDATE tunnels SET name=$2 WHERE id=$1")
+        .bind(tunnel_id)
+        .bind(name)
+        .execute(pg)
+        .await?;
+    Ok(())
+}
+
+/// Current lifecycle status of a tunnel ('awaiting_agent'|'online'|'offline'|'stopped').
+pub async fn tunnel_status(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<Option<String>> {
+    Ok(sqlx::query_scalar::<_, String>("SELECT status FROM tunnels WHERE id = $1")
+        .bind(tunnel_id)
+        .fetch_optional(pg)
+        .await?)
+}
+
+/// True if `name` is on the reserved-subdomain block list (pool variant of the
+/// reservation-time check, for the admin/owner edit path).
+pub async fn is_reserved_subdomain(pg: &PgPool, name: &str) -> anyhow::Result<bool> {
+    Ok(
+        sqlx::query_scalar::<_, bool>("SELECT exists(SELECT 1 FROM reserved_subdomains WHERE name = $1)")
+            .bind(name)
+            .fetch_one(pg)
+            .await?,
+    )
+}
+
+/// True if `name` is already used by some *other* tunnel (excludes `self_id`).
+pub async fn subdomain_in_use(pg: &PgPool, name: &str, self_id: i64) -> anyhow::Result<bool> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT exists(SELECT 1 FROM tunnels WHERE subdomain = $1 AND id <> $2)",
+    )
+    .bind(name)
+    .bind(self_id)
+    .fetch_one(pg)
+    .await?)
+}
+
+/// Change a tunnel's subdomain (the routing key); `public_host` is the node base
+/// and is unchanged, so the full host becomes `{new}.{public_host}`. Relies on the
+/// caller to have validated format / reserved / uniqueness first; the UNIQUE
+/// constraint is the final backstop (surfaces as an error).
+pub async fn set_tunnel_subdomain(pg: &PgPool, tunnel_id: i64, subdomain: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE tunnels SET subdomain=$2 WHERE id=$1")
+        .bind(tunnel_id)
+        .bind(subdomain)
+        .execute(pg)
+        .await?;
+    Ok(())
+}
+
+/// Set/clear a single route's free-text label (scoped to its tunnel).
+pub async fn update_route_label(
+    pg: &PgPool,
+    tunnel_id: i64,
+    route_id: i32,
+    label: Option<&str>,
+) -> anyhow::Result<u64> {
+    let r = sqlx::query("UPDATE routes SET label=$3 WHERE tunnel_id=$1 AND route_id=$2")
+        .bind(tunnel_id)
+        .bind(route_id)
+        .bind(label)
+        .execute(pg)
+        .await?;
+    Ok(r.rows_affected())
+}
+
+/// (tunnel_id, subdomain, node_id) for every tunnel owned by `owner_id` — used to
+/// signal each tunnel's node to drop the live session (e.g. on ban).
+pub async fn owner_tunnel_targets(
+    pg: &PgPool,
+    owner_id: i32,
+) -> anyhow::Result<Vec<(i64, String, Option<String>)>> {
+    Ok(sqlx::query_as::<_, (i64, String, Option<String>)>(
+        "SELECT id, subdomain, node_id FROM tunnels WHERE owner_id = $1",
+    )
+    .bind(owner_id)
+    .fetch_all(pg)
+    .await?)
+}
+
+// --------------------------------------------------------------------------
+// User profile + moderation
+// --------------------------------------------------------------------------
+
+/// Update a user's display name and email. Email uniqueness is enforced by the DB
+/// (`users_email_key`); the caller should pre-check to return a friendly 409.
+pub async fn update_user_profile(pg: &PgPool, user_id: i32, name: Option<&str>, email: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE users SET name=$2, email=$3 WHERE id=$1")
+        .bind(user_id)
+        .bind(name)
+        .bind(email)
+        .execute(pg)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_user_password(pg: &PgPool, user_id: i32, new_hash: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE users SET password_hash=$2 WHERE id=$1")
+        .bind(user_id)
+        .bind(new_hash)
+        .execute(pg)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_user_banned(pg: &PgPool, user_id: i32, banned: bool) -> anyhow::Result<()> {
+    sqlx::query("UPDATE users SET banned=$2 WHERE id=$1")
+        .bind(user_id)
+        .bind(banned)
+        .execute(pg)
+        .await?;
+    Ok(())
+}
+
+/// Delete a user; FK cascades remove their tunnels/routes/logs and free their ports.
+pub async fn delete_user(pg: &PgPool, user_id: i32) -> anyhow::Result<u64> {
+    Ok(sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(user_id)
+        .execute(pg)
+        .await?
+        .rows_affected())
+}
+
+/// Cheap banned-state check for guarding actions on an existing session.
+pub async fn is_user_banned(pg: &PgPool, user_id: i32) -> anyhow::Result<bool> {
+    Ok(sqlx::query_scalar::<_, bool>("SELECT banned FROM users WHERE id=$1")
+        .bind(user_id)
+        .fetch_optional(pg)
+        .await?
+        .unwrap_or(false))
 }
 
 pub async fn append_bandwidth(pg: &PgPool, tunnel_id: i64, owner_id: i32, bytes_in: i64, bytes_out: i64) -> anyhow::Result<()> {
@@ -571,7 +730,7 @@ pub async fn reconcile_abandoned(pg: &PgPool, grace_secs: i64) -> anyhow::Result
     let mut tx = pg.begin().await?;
     let stale: Vec<i64> = sqlx::query_scalar(
         "SELECT id FROM tunnels
-         WHERE status <> 'awaiting_agent'
+         WHERE status NOT IN ('awaiting_agent', 'stopped')
            AND COALESCE(last_seen, created_at) < now() - make_interval(secs => $1)",
     )
     .bind(grace_secs as f64)

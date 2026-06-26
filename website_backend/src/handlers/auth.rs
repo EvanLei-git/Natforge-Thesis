@@ -44,7 +44,7 @@ pub struct AuthResponse {
     pub status: String,
 }
 
-fn hash_password(password: &str) -> String {
+pub(crate) fn hash_password(password: &str) -> String {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
@@ -52,7 +52,7 @@ fn hash_password(password: &str) -> String {
         .to_string()
 }
 
-fn verify_password(password: &str, hash: &str) -> bool {
+pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
     match PasswordHash::new(hash) {
         Ok(parsed) => Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok(),
         Err(_) => false,
@@ -76,7 +76,7 @@ pub async fn register_user(
     if queries::user_by_email(&state.db.pg, &email).await.map_err(db_err)?.is_some() {
         return Err((StatusCode::CONFLICT, "email already registered".into()));
     }
-    let user = queries::create_user(&state.db.pg, &email, &hash_password(&payload.password))
+    let user = queries::create_user(&state.db.pg, &email, &hash_password(&payload.password), &state.config.admin_email)
         .await
         .map_err(db_err)?;
     tracing::info!("registered {} (id {}, role {})", user.email, user.id, user.role);
@@ -101,6 +101,9 @@ pub async fn login_user(
     let user = user
         .filter(|u| verify_password(&payload.password, &u.password_hash))
         .ok_or((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()))?;
+    if user.banned {
+        return Err((StatusCode::FORBIDDEN, "this account is banned".into()));
+    }
     let token = issue_session(&state.config.jwt_secret, user.id, &user.email, &user.role);
     Ok(Json(AuthResponse { token, role: user.role, status: "ok".into() }))
 }
@@ -162,6 +165,7 @@ pub async fn device_token(
             Some(uid) => {
                 let user = queries::user_by_id(&state.db.pg, uid).await.map_err(db_err)?;
                 match user {
+                    Some(u) if u.banned => Ok(Json(json!({ "status": "banned" }))),
                     Some(u) => {
                         let token = issue_session(&state.config.jwt_secret, u.id, &u.email, &u.role);
                         Ok(Json(json!({ "status": "approved", "token": token, "role": u.role })))

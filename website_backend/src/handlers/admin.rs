@@ -135,6 +135,54 @@ pub async fn list_users(
     Ok(Json(queries::users_overview(&state.db.pg).await.map_err(err)?))
 }
 
+/// DELETE /api/admin/users/{id} — remove a user and (by FK cascade) their tunnels,
+/// freeing the ports. Live sessions are dropped first (best-effort).
+pub async fn delete_user(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(user_id): Path<i32>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin(&user)?;
+    if user_id == user.user_id {
+        return Err((StatusCode::BAD_REQUEST, "you cannot delete your own admin account".into()));
+    }
+    for (_, sub, node_id) in queries::owner_tunnel_targets(&state.db.pg, user_id).await.map_err(err)? {
+        crate::handlers::tunnels::signal_node_stop(&state, &sub, &node_id).await;
+    }
+    let n = queries::delete_user(&state.db.pg, user_id).await.map_err(err)?;
+    if n == 0 {
+        return Err((StatusCode::NOT_FOUND, "no such user".into()));
+    }
+    Ok(Json(json!({ "status": "user_deleted", "user_id": user_id })))
+}
+
+#[derive(Deserialize)]
+pub struct BanReq {
+    pub banned: bool,
+}
+
+/// PATCH /api/admin/users/{id} — ban or unban a user. Banning drops their live
+/// tunnels (and marks them stopped); banned users cannot log in or reserve.
+pub async fn set_user_ban(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(user_id): Path<i32>,
+    Json(req): Json<BanReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_admin(&user)?;
+    if user_id == user.user_id {
+        return Err((StatusCode::BAD_REQUEST, "you cannot ban your own admin account".into()));
+    }
+    queries::set_user_banned(&state.db.pg, user_id, req.banned).await.map_err(err)?;
+    if req.banned {
+        for (tid, sub, node_id) in queries::owner_tunnel_targets(&state.db.pg, user_id).await.map_err(err)? {
+            crate::handlers::tunnels::signal_node_stop(&state, &sub, &node_id).await;
+            let _ = queries::stop_tunnel_keep(&state.db.pg, tid).await;
+        }
+    }
+    Ok(Json(json!({ "status": if req.banned { "banned" } else { "unbanned" }, "user_id": user_id })))
+}
+
 // --------------------------------------------------------------------------
 // Nodes / regions (each is a data-plane VM that self-registers on boot).
 // --------------------------------------------------------------------------

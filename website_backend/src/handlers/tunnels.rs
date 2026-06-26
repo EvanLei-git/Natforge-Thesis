@@ -69,6 +69,9 @@ pub async fn request_tunnel(
     user: AuthUser,
     Json(req): Json<RequestTunnelReq>,
 ) -> Result<Json<TunnelRequestRes>, (StatusCode, String)> {
+    if queries::is_user_banned(&state.db.pg, user.user_id).await.unwrap_or(false) {
+        return Err((StatusCode::FORBIDDEN, "this account is banned".into()));
+    }
     if req.routes.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "at least one route is required".into()));
     }
@@ -311,25 +314,12 @@ pub async fn list_regions(
     )
 }
 
-pub async fn stop_tunnel(
-    State(state): State<SharedState>,
-    user: AuthUser,
-    Path(tunnel_id): Path<i64>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let owner = queries::tunnel_owner_subdomain(&state.db.pg, tunnel_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let (owner_id, subdomain, node_id) = match owner {
-        Some(v) => v,
-        None => return Err((StatusCode::NOT_FOUND, "no such tunnel".into())),
-    };
-    if owner_id != user.user_id && user.role != "admin" {
-        return Err((StatusCode::FORBIDDEN, "not your tunnel".into()));
-    }
-
-    // Route the stop signal to the node hosting the tunnel (fall back to core_url).
+/// Best-effort: tell the node hosting a subdomain to drop its live yamux session
+/// (internal-secret guarded). Routed to the node's internal URL, falling back to
+/// the configured `core_url`. Reused by stop/delete and by admin ban/delete-user.
+pub(crate) async fn signal_node_stop(state: &SharedState, subdomain: &str, node_id: &Option<String>) {
     let base = match node_id {
-        Some(nid) => queries::get_node(&state.db.pg, &nid)
+        Some(nid) => queries::get_node(&state.db.pg, nid)
             .await
             .ok()
             .flatten()
@@ -337,7 +327,6 @@ pub async fn stop_tunnel(
             .unwrap_or_else(|| state.config.core_url.clone()),
         None => state.config.core_url.clone(),
     };
-    // Best-effort: tell the data plane to drop the live session (internal-secret guarded).
     let url = format!("{}/internal/tunnels/{}/stop", base, subdomain);
     let _ = state
         .http
@@ -345,12 +334,152 @@ pub async fn stop_tunnel(
         .header("x-internal-secret", &state.config.internal_secret)
         .send()
         .await;
+}
 
+/// Ownership/admin check; returns (subdomain, node_id) for the tunnel.
+async fn authorize_tunnel_owner(
+    state: &SharedState,
+    user: &AuthUser,
+    tunnel_id: i64,
+) -> Result<(String, Option<String>), (StatusCode, String)> {
+    let owner = queries::tunnel_owner_subdomain(&state.db.pg, tunnel_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "no such tunnel".to_string()))?;
+    let (owner_id, subdomain, node_id) = owner;
+    if owner_id != user.user_id && user.role != "admin" {
+        return Err((StatusCode::FORBIDDEN, "not your tunnel".into()));
+    }
+    Ok((subdomain, node_id))
+}
+
+/// DELETE /api/tunnels/{id} — remove the tunnel and free its ports.
+pub async fn delete_tunnel(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(tunnel_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (subdomain, node_id) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
+    signal_node_stop(&state, &subdomain, &node_id).await;
     let deleted = queries::delete_tunnel(&state.db.pg, tunnel_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if deleted == 0 {
         return Err((StatusCode::GONE, "tunnel already removed".into()));
     }
-    Ok(Json(json!({ "status": "tunnel_closed", "tunnel_id": tunnel_id })))
+    Ok(Json(json!({ "status": "tunnel_deleted", "tunnel_id": tunnel_id })))
+}
+
+/// POST /api/tunnels/{id}/stop — drop the live session but KEEP the tunnel
+/// (status `stopped`, same subdomain/ports). Restart by re-running the agent.
+pub async fn stop_tunnel(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(tunnel_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (subdomain, node_id) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
+    signal_node_stop(&state, &subdomain, &node_id).await;
+    let n = queries::stop_tunnel_keep(&state.db.pg, tunnel_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if n == 0 {
+        return Err((StatusCode::GONE, "tunnel already removed".into()));
+    }
+    Ok(Json(json!({ "status": "tunnel_stopped", "tunnel_id": tunnel_id })))
+}
+
+#[derive(Deserialize)]
+pub struct RouteLabelEdit {
+    pub route_id: i32,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct EditTunnelReq {
+    /// Present => set/clear the display name. Absent => leave unchanged.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Present => change the subdomain (the public address). Absent => leave.
+    #[serde(default)]
+    pub subdomain: Option<String>,
+    /// Per-route label edits (each scoped by route_id within this tunnel).
+    #[serde(default)]
+    pub route_labels: Vec<RouteLabelEdit>,
+}
+
+/// PATCH /api/tunnels/{id} — edit a tunnel's display name, subdomain (its public
+/// address), and per-route labels (owner or admin). The local port is the agent's
+/// OWN machine port (set via `--route` and part of the idempotency key), so it is
+/// deliberately not editable here. A live subdomain change drops the session so the
+/// running agent re-reserves onto the new host (~3s).
+pub async fn edit_tunnel(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(tunnel_id): Path<i64>,
+    Json(req): Json<EditTunnelReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (current_sub, node_id) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
+
+    // 1) Display name (present => set/clear).
+    if let Some(raw) = req.name.as_ref() {
+        let trimmed = raw.trim();
+        if trimmed.chars().count() > 60 {
+            return Err((StatusCode::BAD_REQUEST, "name too long (max 60 chars)".into()));
+        }
+        let name = if trimmed.is_empty() { None } else { Some(trimmed) };
+        queries::rename_tunnel(&state.db.pg, tunnel_id, name)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    // 2) Per-route labels.
+    for rl in &req.route_labels {
+        let label = rl.label.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if label.map(|s| s.chars().count() > 40).unwrap_or(false) {
+            return Err((StatusCode::BAD_REQUEST, "route label too long (max 40 chars)".into()));
+        }
+        queries::update_route_label(&state.db.pg, tunnel_id, rl.route_id, label)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
+
+    // 3) Subdomain — the actual address. Validate, ensure free, apply.
+    let mut subdomain_changed = false;
+    if let Some(raw) = req.subdomain.as_ref() {
+        let want = raw.trim().to_lowercase();
+        if want != current_sub {
+            if !queries::valid_subdomain(&want) {
+                return Err((StatusCode::BAD_REQUEST,
+                    "invalid subdomain (3–30 chars, lowercase a–z/0–9/-, must start & end alphanumeric)".into()));
+            }
+            if queries::is_reserved_subdomain(&state.db.pg, &want).await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            {
+                return Err((StatusCode::CONFLICT, "that subdomain is reserved".into()));
+            }
+            if queries::subdomain_in_use(&state.db.pg, &want, tunnel_id).await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            {
+                return Err((StatusCode::CONFLICT, "that subdomain is already taken".into()));
+            }
+            queries::set_tunnel_subdomain(&state.db.pg, tunnel_id, &want).await
+                .map_err(|_| (StatusCode::CONFLICT, "that subdomain is already taken".into()))?;
+            subdomain_changed = true;
+
+            // If the tunnel is live, drop the session on the OLD subdomain so the
+            // running agent re-reserves and reconnects on the new host.
+            let status = queries::tunnel_status(&state.db.pg, tunnel_id).await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            if status.as_deref() == Some("online") {
+                signal_node_stop(&state, &current_sub, &node_id).await;
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "status": "tunnel_updated",
+        "tunnel_id": tunnel_id,
+        "subdomain_changed": subdomain_changed,
+    })))
 }

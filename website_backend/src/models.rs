@@ -7,8 +7,10 @@ use serde::{Deserialize, Serialize};
 pub struct User {
     pub id: i32,
     pub email: String,
+    pub name: Option<String>,
     pub password_hash: String,
     pub role: String,
+    pub banned: bool,
     pub max_tunnels: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -18,6 +20,7 @@ pub struct User {
 pub struct TunnelRow {
     pub id: i64,
     pub subdomain: String,
+    pub name: Option<String>,
     pub owner_id: i32,
     pub route_sig: String,
     pub status: String,
@@ -86,7 +89,9 @@ pub struct BandwidthSample {
 pub struct UserOverview {
     pub id: i32,
     pub email: String,
+    pub name: Option<String>,
     pub role: String,
+    pub banned: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub tunnel_count: i64,
     pub total_bytes: i64,
@@ -110,6 +115,7 @@ pub struct RouteView {
 pub struct TunnelView {
     pub tunnel_id: i64,
     pub subdomain: String,
+    pub name: Option<String>,
     pub full_host: String,
     pub public_host: String,
     pub status: String,
