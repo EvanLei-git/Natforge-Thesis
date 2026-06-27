@@ -8,6 +8,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: natforge-postgres
+    restart: unless-stopped          # survive host reboots (control plane depends on it)
     environment:
       POSTGRES_USER: natforge
       POSTGRES_PASSWORD: natforge
@@ -25,6 +26,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: natforge-redis
+    restart: unless-stopped          # survive host reboots
     ports:
       - "6379:6379"
     healthcheck:
