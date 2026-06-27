@@ -56,7 +56,7 @@ RSV=$(curl -s 127.0.0.1:3000/api/tunnels/request -H "authorization: Bearer $TOK"
   -d '{"routes":[{"mode":"http","local_port":8000},{"mode":"https","local_port":9443},{"mode":"tcp","local_port":25565}]}')
 SUB=$(echo "$RSV"|jq -r .subdomain); TID=$(echo "$RSV"|jq -r .tunnel_id)
 TCP_PORT=$(echo "$RSV"|jq -r '.routes[]|select(.mode=="tcp")|.public_endpoint'|sed 's/.*://')
-./target/debug/proxy_node service-host --token "$TOK" \
+./target/debug/natforge service-host --token "$TOK" \
   --route 8000:http --route 9443:https --route 25565:tcp >/tmp/nf_agent.log 2>&1 & PIDS+=($!)
 sleep 3
 echo "  reserved subdomain=$SUB tcp_port=$TCP_PORT"
@@ -75,7 +75,7 @@ curl -sk --resolve "$SUB.natforge.com:8443:127.0.0.1" "https://$SUB.natforge.com
 T2=$(curl -s 127.0.0.1:3000/api/auth/register -H 'content-type: application/json' -d '{"email":"x@y.z","password":"secondpass"}' | jq -r '.token//empty')
 R2=$(curl -s 127.0.0.1:3000/api/tunnels/request -H "authorization: Bearer $T2" -H 'content-type: application/json' -d '{"routes":[{"mode":"http","local_port":8000}]}')
 SUB2=$(echo "$R2"|jq -r .subdomain)
-./target/debug/proxy_node service-host --token "$T2" --route 8000:http >/tmp/nf_agent2.log 2>&1 & PIDS+=($!)
+./target/debug/natforge service-host --token "$T2" --route 8000:http >/tmp/nf_agent2.log 2>&1 & PIDS+=($!)
 sleep 3
 { [ "$(curl -s -H "Host: $SUB.natforge.com" http://127.0.0.1:18080/)" = "HELLO-OVER-HTTP-SUBDOMAIN" ] && \
   [ "$(curl -s -H "Host: $SUB2.natforge.com" http://127.0.0.1:18080/)" = "HELLO-OVER-HTTP-SUBDOMAIN" ]; } \
@@ -107,15 +107,77 @@ CERT_FP=$(echo | openssl s_client -connect 127.0.0.1:4000 2>/dev/null \
 { [ -n "$RSV_FP" ] && [ "$RSV_FP" = "$CERT_FP" ]; } \
   && ok "control port serves TLS with the pinned cert" || bad "control TLS / cert pin (rsv=$RSV_FP cert=$CERT_FP)"
 
+echo "### 4c. profile, tunnel rename, stop-keeps-vs-delete, ban"
+# profile: set display name, change password, re-login with the new password
+curl -s -X PUT 127.0.0.1:3000/api/user/profile -H "authorization: Bearer $TOK" \
+  -H 'content-type: application/json' -d '{"email":"evan@natforge.com","name":"Evan Admin"}' >/dev/null
+[ "$(curl -s 127.0.0.1:3000/api/user/profile -H "authorization: Bearer $TOK" | jq -r .name)" = "Evan Admin" ] \
+  && ok "profile display-name update" || bad "profile name update"
+curl -s -X PUT 127.0.0.1:3000/api/user/password -H "authorization: Bearer $TOK" \
+  -H 'content-type: application/json' -d '{"current_password":"hunter2pass","new_password":"hunter3pass"}' >/dev/null
+NEWTOK=$(curl -s 127.0.0.1:3000/api/auth/login -H 'content-type: application/json' \
+  -d '{"email":"evan@natforge.com","password":"hunter3pass"}' | jq -r '.token//empty')
+[ -n "$NEWTOK" ] && ok "password change + re-login" || bad "password change + re-login"
+[ -n "$NEWTOK" ] && TOK="$NEWTOK"
+# tunnel rename (owner)
+curl -s -X PATCH 127.0.0.1:3000/api/tunnels/$TID -H "authorization: Bearer $TOK" \
+  -H 'content-type: application/json' -d '{"name":"My Game Server"}' >/dev/null
+[ "$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -r --argjson id "$TID" '.[]|select(.tunnel_id==$id)|.name')" = "My Game Server" ] \
+  && ok "tunnel rename" || bad "tunnel rename"
+# stop KEEPS the tunnel (count unchanged, not deleted)
+n_before=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq 'length')
+curl -s -X POST 127.0.0.1:3000/api/tunnels/$TID/stop -H "authorization: Bearer $TOK" >/dev/null
+n_after=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq 'length')
+{ [ "$n_before" = "$n_after" ] && [ "$n_after" -gt 0 ]; } \
+  && ok "stop keeps the tunnel (not deleted)" || bad "stop keeps tunnel ($n_before -> $n_after)"
+# ban blocks login
+curl -s 127.0.0.1:3000/api/auth/register -H 'content-type: application/json' \
+  -d '{"email":"banme@x.z","password":"banpass12"}' >/dev/null
+BUID=$(curl -s 127.0.0.1:3000/api/admin/users -H "authorization: Bearer $TOK" | jq -r '.[]|select(.email=="banme@x.z")|.id')
+curl -s -X PATCH 127.0.0.1:3000/api/admin/users/$BUID -H "authorization: Bearer $TOK" \
+  -H 'content-type: application/json' -d '{"banned":true}' >/dev/null
+BCODE=$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3000/api/auth/login \
+  -H 'content-type: application/json' -d '{"email":"banme@x.z","password":"banpass12"}')
+[ "$BCODE" = "403" ] && ok "banned user cannot log in (403)" || bad "ban blocks login (got $BCODE)"
+
 echo "### 5. state survives a both-planes restart"
 before=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -rc '.[0]|{subdomain,tcp:(.routes[]|select(.mode=="tcp")|.public_endpoint)}')
 kill %2 2>/dev/null; pkill -9 -f '[t]arget/debug/website_backend' 2>/dev/null; pkill -9 -f '[t]arget/debug/core_proxy_backend' 2>/dev/null
-sleep 2; start_planes; sleep 5
+sleep 2; start_planes; sleep 9
 after=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -rc '.[0]|{subdomain,tcp:(.routes[]|select(.mode=="tcp")|.public_endpoint)}')
 [ "$before" = "$after" ] && [ -n "$before" ] \
   && ok "same subdomain+port after restart ($after)" || bad "state survives restart (before=$before after=$after)"
 [ "$(curl -s -H "Host: $SUB.natforge.com" http://127.0.0.1:18080/)" = "HELLO-OVER-HTTP-SUBDOMAIN" ] \
   && ok "HTTP works again after restart" || bad "HTTP after restart"
+
+echo "### 6. tunnel edit: route label, subdomain validation, and live re-route"
+# route label edit — instant, no routing change
+RID=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -r --argjson id "$TID" '.[]|select(.tunnel_id==$id)|.routes[0].route_id')
+curl -s -X PATCH 127.0.0.1:3000/api/tunnels/$TID -H "authorization: Bearer $TOK" -H 'content-type: application/json' \
+  -d "{\"route_labels\":[{\"route_id\":$RID,\"label\":\"edited-label\"}]}" >/dev/null
+[ "$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -r --argjson id "$TID" --argjson r "$RID" '.[]|select(.tunnel_id==$id)|.routes[]|select(.route_id==$r)|.label')" = "edited-label" ] \
+  && ok "route label edit" || bad "route label edit"
+# subdomain validation: too short -> 400
+sc=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH 127.0.0.1:3000/api/tunnels/$TID -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d '{"subdomain":"x"}')
+[ "$sc" = "400" ] && ok "reject invalid subdomain (400)" || bad "invalid subdomain (got $sc)"
+# subdomain uniqueness: SUB2 belongs to the other tunnel -> 409
+sc=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH 127.0.0.1:3000/api/tunnels/$TID -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d "{\"subdomain\":\"$SUB2\"}")
+[ "$sc" = "409" ] && ok "reject already-taken subdomain (409)" || bad "taken subdomain (got $sc)"
+# happy path: change the address; API reflects immediately, live tunnel re-routes
+NEWSUB=$(echo "edited-$SUB" | cut -c1-30)
+curl -s -X PATCH 127.0.0.1:3000/api/tunnels/$TID -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d "{\"subdomain\":\"$NEWSUB\"}" >/dev/null
+[ "$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -r --argjson id "$TID" '.[]|select(.tunnel_id==$id)|.subdomain')" = "$NEWSUB" ] \
+  && ok "subdomain change reflected in API" || bad "subdomain change in API"
+# the running agent re-reserves and re-routes onto the new host within a few seconds
+live=""
+for _ in $(seq 1 15); do
+  [ "$(curl -s -H "Host: $NEWSUB.natforge.com" http://127.0.0.1:18080/)" = "HELLO-OVER-HTTP-SUBDOMAIN" ] && { live=1; break; }
+  sleep 1
+done
+[ -n "$live" ] && ok "live tunnel re-routes onto the new subdomain" || bad "live re-route after subdomain edit"
+# the old subdomain is no longer served
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $SUB.natforge.com" http://127.0.0.1:18080/)" = "404" ] \
+  && ok "old subdomain freed after edit" || bad "old subdomain still served ($SUB)"
 
 echo
 echo "### RESULT: $pass passed, $fail failed"

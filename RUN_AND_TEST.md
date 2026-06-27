@@ -67,7 +67,7 @@ PUBLIC_HOST=natforge.com HTTP_PORT=8080 HTTPS_PORT=8443 ./target/debug/core_prox
 **5 — a service to expose + the agent.** *Why: stand-in for your real app, then the agent that tunnels it.*
 ```bash
 python3 -m http.server 8000                                   # something to expose
-./target/debug/proxy_node service-host --route 8000:http      # interactive device-flow login
+./target/debug/natforge service-host --route 8000:http      # interactive device-flow login
 #   or skip the prompt:  --email you@x.com --password yourpass
 #   or a raw game port:  --route 25565:tcp
 ```
@@ -99,7 +99,7 @@ A previous run is still holding a port. Kill strays (the bracket avoids killing 
 ```bash
 pkill -9 -f '[t]arget/debug/website_backend'
 pkill -9 -f '[t]arget/debug/core_proxy_backend'
-pkill -9 -f '[t]arget/debug/proxy_node'
+pkill -9 -f '[t]arget/debug/natforge'
 ```
 
 **"failed to connect to PostgreSQL/Redis".** Run `docker compose up -d` and check `docker compose ps` shows both healthy.
