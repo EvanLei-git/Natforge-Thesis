@@ -18,6 +18,7 @@
                 <a href="dashboard.html" class="nav-link active"><span data-icon="service"></span> Service Host</a>
                 <a href="admin.html" class="nav-link admin-only"><span data-icon="admin"></span> Admin</a>
                 <a href="users.html" class="nav-link admin-only"><span data-icon="users"></span> Users</a>
+                <a href="profile.html" class="nav-link"><span data-icon="user"></span> Profile</a>
             </nav>
             <div class="nav-spacer"></div>
             <a href="#" onclick="logout()" class="nav-link danger"><span data-icon="logout"></span> Sign out</a>
@@ -67,7 +68,7 @@
             <div class="card">
                 <div class="card-head"><h5>Link a CLI device</h5></div>
                 <div class="card-body">
-                    <p class="muted small">Run <code>proxy_node service-host</code> on your machine; it prints a code. Enter it here to authorise the device (RFC 8628 device flow).</p>
+                    <p class="muted small">Run <code>natforge service-host</code> on your machine; it prints a code. Enter it here to authorise the device (RFC 8628 device flow).</p>
                     <form id="deviceForm" class="row-inline" style="max-width:380px">
                         <input type="text" id="deviceCode" class="input code-input" placeholder="ABCD-EFGH" required style="flex:1">
                         <button type="submit" class="btn btn-secondary"><span data-icon="device"></span> Authorise</button>
@@ -198,19 +199,24 @@
             document.getElementById('detailMain').innerHTML = `
                 <div class="row-inline" style="justify-content:space-between; align-items:flex-start; gap:12px">
                     <div>
-                        <div class="host" style="font-size:1.1rem">${t.full_host}</div>
+                        <div class="host" style="font-size:1.1rem">${t.name ? escapeHtml(t.name) : t.full_host}
+                            <button class="btn btn-secondary btn-icon" title="Edit tunnel" style="margin-left:4px" onclick="editTunnel(${t.tunnel_id})">${nfIcon('edit')}</button>
+                        </div>
                         <div class="row-inline mt-xs" style="gap:8px; align-items:center">
                             <span class="badge ${t.status}">${t.status.replace('_',' ')}</span>${region} ${agentIp}
-                            <span class="faint small">#${t.tunnel_id}</span>
+                            <span class="faint small">${t.name ? escapeHtml(t.full_host) + ' &middot; ' : ''}#${t.tunnel_id}</span>
                         </div>
                     </div>
-                    <button class="btn btn-danger btn-sm" onclick="stopTunnel(${t.tunnel_id})">${nfIcon('stop')} Stop</button>
+                    <div class="row-inline" style="gap:8px">
+                        <button class="btn btn-secondary btn-sm" onclick="stopTunnel(${t.tunnel_id})" title="Drop the live session but keep the tunnel (restart by re-running the agent)">${nfIcon('stop')} Stop</button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteTunnel(${t.tunnel_id})" title="Remove the tunnel and free its ports">${nfIcon('trash')} Delete</button>
+                    </div>
                 </div>
 
                 <label class="lbl mt">Routes</label>
                 <div>${routes}</div>
                 <details class="mt-xs"><summary class="faint small" style="cursor:pointer">Show agent command</summary>
-                    <pre class="block" style="margin-top:8px">proxy_node service-host \\\n  ${flags} \\\n  --token &lt;your session token&gt;</pre>
+                    <pre class="block" style="margin-top:8px">natforge service-host \\\n  ${flags} \\\n  --token &lt;your session token&gt;</pre>
                 </details>
 
                 <label class="lbl mt">Logging — bandwidth</label>
@@ -275,9 +281,27 @@
             } catch (err) { toast(err.message, 'danger'); }
         }
 
+        // Stop: drop the live session but KEEP the tunnel (status 'stopped', restartable).
         async function stopTunnel(id) {
-            try { await API.stopTunnel(id); toast(`Stopped tunnel #${id}`, 'success');
+            try { await API.stopTunnel(id); toast('Tunnel stopped (kept — restart by re-running the agent)', 'success'); loadTunnels(); }
+            catch (err) { toast(err.message, 'danger'); }
+        }
+        // Delete: remove the tunnel and free its ports.
+        async function deleteTunnel(id) {
+            if (!await nfConfirm({ title: 'Delete tunnel', danger: true, confirmText: 'Delete',
+                message: 'Delete this tunnel? Its ports are freed and it disappears. (Use Stop to keep it.)' })) return;
+            try { await API.deleteTunnel(id); toast(`Deleted tunnel #${id}`, 'success');
                   if (id === selectedTunnelId) selectedTunnelId = null; loadTunnels(); }
+            catch (err) { toast(err.message, 'danger'); }
+        }
+        async function editTunnel(id) {
+            const t = tunnelsCache.find(x => x.tunnel_id === id);
+            if (!t) return;
+            const res = await nfPrompt({ title: 'Edit tunnel', confirmText: 'Save',
+                message: 'Changing the subdomain moves the public address (a live tunnel re-routes within a few seconds). The local port is set when you run the agent, so it is shown for reference only.',
+                fields: tunnelEditFields(t) });
+            if (res === null) return;
+            try { await API.editTunnel(id, tunnelEditBody(t, res)); toast('Tunnel updated', 'success'); blockingForId = null; loadTunnels(); }
             catch (err) { toast(err.message, 'danger'); }
         }
 
@@ -313,7 +337,7 @@
                 document.getElementById('reqResult').innerHTML =
                     `<div class="badge online" style="margin-bottom:10px">Reserved ${r.full_host}${where} (${r.status})</div>
                      <p class="muted small" style="margin:0 0 6px">Run the agent on the machine hosting your server(s):</p>
-                     <pre class="block">proxy_node service-host \\\n  ${flags}${regionFlag} \\\n  --token &lt;your session token&gt;</pre>`;
+                     <pre class="block">natforge service-host \\\n  ${flags}${regionFlag} \\\n  --token &lt;your session token&gt;</pre>`;
                 selectedTunnelId = r.tunnel_id; // focus the new tunnel after refresh
                 loadTunnels();
             } catch (err) { toast(err.message, 'danger'); }

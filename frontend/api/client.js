@@ -62,17 +62,28 @@ class NatForgeAPI {
             node_id: nodeId || null,
         });
     }
-    stopTunnel(tunnelId)  { return this._req('DELETE', `/tunnels/${encodeURIComponent(tunnelId)}`); }
+    stopTunnel(tunnelId)  { return this._req('POST', `/tunnels/${encodeURIComponent(tunnelId)}/stop`); }
+    deleteTunnel(tunnelId){ return this._req('DELETE', `/tunnels/${encodeURIComponent(tunnelId)}`); }
+    renameTunnel(tunnelId, name) { return this._req('PATCH', `/tunnels/${encodeURIComponent(tunnelId)}`, { name: name || null }); }
+    // Full edit: { subdomain?, name?, route_labels?: [{route_id, label}] }.
+    editTunnel(tunnelId, body)   { return this._req('PATCH', `/tunnels/${encodeURIComponent(tunnelId)}`, body); }
     getRegions()          { return this._req('GET', '/regions'); }
     getTunnelBandwidth(id){ return this._req('GET', `/tunnels/${encodeURIComponent(id)}/bandwidth`); }
     getTunnelLogs(id)     { return this._req('GET', `/tunnels/${encodeURIComponent(id)}/logs`); }
     getTunnelRegionBlocks(id)       { return this._req('GET', `/tunnels/${encodeURIComponent(id)}/region_blocks`); }
     setTunnelRegionBlocks(id, codes){ return this._req('PUT', `/tunnels/${encodeURIComponent(id)}/region_blocks`, { country_codes: codes }); }
 
+    // --- User self-service (profile + password) ---
+    getProfile()              { return this._req('GET', '/user/profile'); }
+    updateProfile(email, name){ return this._req('PUT', '/user/profile', { email, name: name || null }); }
+    changePassword(current_password, new_password) { return this._req('PUT', '/user/password', { current_password, new_password }); }
+
     // --- Admin ---
     getStats()                { return this._req('GET', '/admin/stats'); }
     getAllTunnels()           { return this._req('GET', '/admin/tunnels'); }
     getUsers()                { return this._req('GET', '/admin/users'); }
+    setUserBan(userId, banned){ return this._req('PATCH', `/admin/users/${encodeURIComponent(userId)}`, { banned }); }
+    deleteUser(userId)        { return this._req('DELETE', `/admin/users/${encodeURIComponent(userId)}`); }
     getRegionBlocks()         { return this._req('GET', '/admin/region_blocks'); }
     addRegionBlock(cc)        { return this._req('POST', '/admin/region_blocks', { country_code: cc }); }
     removeRegionBlock(cc)     { return this._req('DELETE', `/admin/region_blocks/${cc}`); }

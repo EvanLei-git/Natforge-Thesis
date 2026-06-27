@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NatForge — Profile</title>
+    <link rel="icon" href="../assets/img/natforge_flake.ico">
+    <link href="../assets/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="brand">
+                <img src="../assets/img/natforge_flake.png" alt="">
+                <span class="name">NatForge</span>
+            </div>
+            <nav class="nav">
+                <a href="dashboard.html" class="nav-link"><span data-icon="service"></span> Service Host</a>
+                <a href="admin.html" class="nav-link admin-only"><span data-icon="admin"></span> Admin</a>
+                <a href="users.html" class="nav-link admin-only"><span data-icon="users"></span> Users</a>
+                <a href="profile.html" class="nav-link active"><span data-icon="user"></span> Profile</a>
+            </nav>
+            <div class="nav-spacer"></div>
+            <a href="#" onclick="logout()" class="nav-link danger"><span data-icon="logout"></span> Sign out</a>
+        </aside>
+
+        <main class="content">
+            <h2 class="page-title">Your profile</h2>
+            <p class="page-sub">Update your display name, email, and password. Your role is <span id="roleBadge" class="badge tag">—</span>.</p>
+
+            <div class="card" style="max-width:520px">
+                <div class="card-head"><h5>Account</h5></div>
+                <div class="card-body">
+                    <form id="profileForm">
+                        <div class="field">
+                            <label class="lbl">Display name <span class="faint small">(optional)</span></label>
+                            <input type="text" id="pfName" class="input" maxlength="60" placeholder="e.g. Evan">
+                        </div>
+                        <div class="field">
+                            <label class="lbl">Email</label>
+                            <input type="email" id="pfEmail" class="input" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary"><span data-icon="user"></span> Save profile</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card" style="max-width:520px">
+                <div class="card-head"><h5>Change password</h5></div>
+                <div class="card-body">
+                    <form id="passwordForm">
+                        <div class="field">
+                            <label class="lbl">Current password</label>
+                            <input type="password" id="pwCurrent" class="input" required>
+                        </div>
+                        <div class="field">
+                            <label class="lbl">New password <span class="faint small">(min 8 characters)</span></label>
+                            <input type="password" id="pwNew" class="input" minlength="8" required>
+                        </div>
+                        <button type="submit" class="btn btn-secondary"><span data-icon="key"></span> Update password</button>
+                    </form>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="../api/client.js"></script>
+    <script src="../assets/js/app.js"></script>
+    <script>
+        if (requireAuth()) { loadProfile(); }
+
+        async function loadProfile() {
+            try {
+                const p = await API.getProfile();
+                document.getElementById('pfName').value = p.name || '';
+                document.getElementById('pfEmail').value = p.email || '';
+                document.getElementById('roleBadge').textContent = p.role;
+            } catch (err) { toast(err.message, 'danger'); }
+        }
+
+        document.getElementById('profileForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                await API.updateProfile(pfEmail.value.trim(), pfName.value.trim());
+                toast('Profile saved', 'success');
+            } catch (err) { toast(err.message, 'danger'); }
+        });
+
+        document.getElementById('passwordForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                await API.changePassword(pwCurrent.value, pwNew.value);
+                toast('Password changed', 'success');
+                e.target.reset();
+            } catch (err) { toast(err.message, 'danger'); }
+        });
+    </script>
+</body>
+</html>
