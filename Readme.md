@@ -78,7 +78,7 @@ The client-side is a single compiled Rust binary deployed via the install script
 - **Geo-blocking:** MaxMind GeoLite2; platform-wide (admin, also gates login) and per-tunnel (owner).
 - **Encrypted control channel:** TLS with self-signed certs pinned by fingerprint.
 - **Auto-Reconnection:** Client reconnects without losing its subdomain, region, or ports.
-- **Tunnel lifecycle:** Separate **Stop** (pause but keep the subdomain + ports, restartable) and **Delete** (remove and free ports); tunnels are renameable.
+- **Tunnel lifecycle:** Separate **Stop** (pause but keep the subdomain + ports, restartable) and **Delete** (remove and free ports). Tunnels are fully **editable** by owner or admin — subdomain (the public address), display name, and per-route labels; changing the subdomain of a *live* tunnel re-routes it onto the new host within a few seconds (the agent re-reserves on reconnect).
 - **Self-service profiles:** Users change their own display name, email, and password from the dashboard.
 - **Moderation:** Admins can rename/delete any tunnel, and ban/unban or delete a user (banning drops their live tunnels and blocks login).
 
