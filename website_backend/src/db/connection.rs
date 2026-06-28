@@ -75,7 +75,7 @@ impl AppState {
 // are naturally short-lived and a perfect fit for Redis key TTLs.
 // --------------------------------------------------------------------------
 
-const DEVCODE_TTL_SECS: i64 = 600; // 10 minutes
+pub const DEVCODE_TTL_SECS: i64 = 1800; // 30 minutes
 
 fn devcode_user_key(user_code: &str) -> String {
     format!("nf:devcode:{user_code}")
@@ -90,7 +90,7 @@ pub struct DeviceRecord {
     pub approved_user: Option<i32>,
 }
 
-/// Store a fresh device/user code pair (both expire together after 10 minutes).
+/// Store a fresh device/user code pair (both expire together after the TTL).
 pub async fn devcode_create(redis: &ConnectionManager, user_code: &str, device_code: &str) -> anyhow::Result<()> {
     let mut conn = redis.clone();
     let uk = devcode_user_key(user_code);
@@ -133,4 +133,20 @@ pub async fn devcode_status(redis: &ConnectionManager, device_code: &str) -> any
     }
     let approved_user = if approved.is_empty() { None } else { approved.parse::<i32>().ok() };
     Ok(Some(DeviceRecord { device_code: stored_device, approved_user }))
+}
+
+/// Consume a device code once its session token has been issued, making it
+/// **single-use** (RFC 8628 §3.5). The `DEL` on the index key is the atomic
+/// single-winner: Redis serialises it, so of any concurrent polls exactly one
+/// gets `removed == 1` and may issue the token; the rest see the code as gone.
+/// The user-keyed hash is dropped too (idempotent).
+pub async fn devcode_consume(redis: &ConnectionManager, device_code: &str) -> anyhow::Result<bool> {
+    let mut conn = redis.clone();
+    let ik = devcode_index_key(device_code);
+    let user_code: Option<String> = conn.get(&ik).await?;
+    let removed: i64 = conn.del(&ik).await?;
+    if let Some(uc) = user_code {
+        let _: () = conn.del(devcode_user_key(&uc)).await?;
+    }
+    Ok(removed == 1)
 }

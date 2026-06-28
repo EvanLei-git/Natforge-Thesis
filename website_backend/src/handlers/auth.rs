@@ -142,7 +142,7 @@ pub async fn device_start(
         user_code,
         verification_uri: format!("https://{}/device", state.config.domain),
         interval: 3,
-        expires_in: 600,
+        expires_in: connection::DEVCODE_TTL_SECS as u32,
     }))
 }
 
@@ -163,6 +163,14 @@ pub async fn device_token(
         Some(r) => match r.approved_user {
             None => Ok(Json(json!({ "status": "authorization_pending" }))),
             Some(uid) => {
+                // Single-use: the first approved poll consumes the code; any
+                // later poll (or replay) sees it gone and gets `expired_token`.
+                let won = connection::devcode_consume(&state.db.redis, &payload.device_code)
+                    .await
+                    .map_err(db_err)?;
+                if !won {
+                    return Ok(Json(json!({ "status": "expired_token" })));
+                }
                 let user = queries::user_by_id(&state.db.pg, uid).await.map_err(db_err)?;
                 match user {
                     Some(u) if u.banned => Ok(Json(json!({ "status": "banned" }))),

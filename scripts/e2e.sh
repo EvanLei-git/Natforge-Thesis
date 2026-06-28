@@ -139,6 +139,15 @@ curl -s -X PATCH 127.0.0.1:3000/api/admin/users/$BUID -H "authorization: Bearer 
 BCODE=$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3000/api/auth/login \
   -H 'content-type: application/json' -d '{"email":"banme@x.z","password":"banpass12"}')
 [ "$BCODE" = "403" ] && ok "banned user cannot log in (403)" || bad "ban blocks login (got $BCODE)"
+# device-authorization flow: 30-min TTL + single-use
+DS=$(curl -s -X POST 127.0.0.1:3000/api/auth/device/start)
+DC=$(echo "$DS" | jq -r .device_code); UCODE=$(echo "$DS" | jq -r .user_code)
+[ "$(echo "$DS" | jq -r .expires_in)" = "1800" ] && ok "device code TTL is 30 min (1800s)" || bad "device TTL (got $(echo "$DS"|jq -r .expires_in))"
+curl -s -X POST 127.0.0.1:3000/api/auth/device -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d "{\"user_code\":\"$UCODE\"}" >/dev/null
+ST1=$(curl -s -X POST 127.0.0.1:3000/api/auth/device/token -H 'content-type: application/json' -d "{\"device_code\":\"$DC\"}" | jq -r .status)
+[ "$ST1" = "approved" ] && ok "device code approved -> session token issued" || bad "device approve/token (got $ST1)"
+ST2=$(curl -s -X POST 127.0.0.1:3000/api/auth/device/token -H 'content-type: application/json' -d "{\"device_code\":\"$DC\"}" | jq -r .status)
+[ "$ST2" = "expired_token" ] && ok "device code is single-use (replay rejected)" || bad "device single-use (got $ST2)"
 
 echo "### 5. state survives a both-planes restart"
 before=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -rc '.[0]|{subdomain,tcp:(.routes[]|select(.mode=="tcp")|.public_endpoint)}')
