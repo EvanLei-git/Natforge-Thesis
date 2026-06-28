@@ -59,7 +59,7 @@ The core high-throughput networking is isolated in the `core_proxy_backend` appl
 
 The client-side is a single compiled Rust binary deployed via the install script:
 
-- **Device Authorization Flow:** To securely link the headless CLI to the web account, the system uses the OAuth 2.0 Device Authorization Grant flow (RFC 8628) [7]. The CLI outputs: *"Please go to natforge.com/device and enter code XYZ."* (A pre-issued `--token` or `--email/--password` also work for non-interactive use.)
+- **Device Authorization Flow:** To securely link the headless CLI to the web account, the system uses the OAuth 2.0 Device Authorization Grant flow (RFC 8628) [7]. The CLI outputs: *"Please go to natforge.com/device and enter code XYZ."* The code is valid for **30 minutes** and is **single-use** (consumed the moment the agent retrieves its token). (A pre-issued `--token` or `--email/--password` also work for non-interactive use.)
 - **Execution (Service Host):** Once authenticated, the user reserves a subdomain, a region, and a set of routes; the agent connects to the chosen region's node over a pinned-TLS channel, and the daemon can be registered to auto-start on boot via systemd.
 - **Adding a region:** An operator deploys another `core_proxy_backend` with a distinct `NODE_ID`/`PUBLIC_HOST` pointed at the same control plane; it self-registers and appears in the admin panel and every user's region dropdown.
 
