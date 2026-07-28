@@ -1,17 +1,17 @@
-//! NatForge — Proxy Node (CLI agent).
+//! NatForge - Proxy Node (CLI agent).
 //!
-//!   * `service-host` — expose one or more local services through a reverse tunnel.
+//!   * `service-host` - expose one or more local services through a reverse tunnel.
 
 mod auth;
 mod service_host;
 mod tls;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use tracing::error;
 
-use natforge_proto::RouteMode;
 use crate::service_host::RouteSpec;
+use natforge_proto::RouteMode;
 
 #[derive(Parser)]
 #[command(name = "natforge")]
@@ -61,9 +61,9 @@ enum Mode {
 fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteSpec>> {
     let mut out = Vec::new();
     for spec in routes {
-        let (port_s, mode_s) = spec
-            .split_once(':')
-            .ok_or_else(|| anyhow!("invalid --route '{spec}', expected <local_port>:<http|https|tcp>"))?;
+        let (port_s, mode_s) = spec.split_once(':').ok_or_else(|| {
+            anyhow!("invalid --route '{spec}', expected <local_port>:<http|https|tcp>")
+        })?;
         let local_port: u16 = port_s
             .parse()
             .map_err(|_| anyhow!("invalid port in --route '{spec}'"))?;
@@ -76,10 +76,15 @@ fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteS
         out.push(RouteSpec { mode, local_port });
     }
     if let Some(p) = local_port {
-        out.push(RouteSpec { mode: RouteMode::Tcp, local_port: p });
+        out.push(RouteSpec {
+            mode: RouteMode::Tcp,
+            local_port: p,
+        });
     }
     if out.is_empty() {
-        return Err(anyhow!("specify at least one --route <local_port>:<mode> (or --local-port)"));
+        return Err(anyhow!(
+            "specify at least one --route <local_port>:<mode> (or --local-port)"
+        ));
     }
     Ok(out)
 }

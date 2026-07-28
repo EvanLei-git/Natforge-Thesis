@@ -1,9 +1,9 @@
 //! Administrator panel: region blocking, global port bans, network overview.
 //! Every handler requires the `admin` role.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -29,7 +29,9 @@ pub async fn get_region_blocks(
     user: AuthUser,
 ) -> Result<Json<Vec<String>>, (StatusCode, String)> {
     require_admin(&user)?;
-    Ok(Json(queries::region_blocks(&state.db.pg).await.map_err(err)?))
+    Ok(Json(
+        queries::region_blocks(&state.db.pg).await.map_err(err)?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -45,9 +47,14 @@ pub async fn add_region_block(
     require_admin(&user)?;
     let code = payload.country_code.trim().to_uppercase();
     if code.len() != 2 {
-        return Err((StatusCode::BAD_REQUEST, "country_code must be 2 letters".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "country_code must be 2 letters".into(),
+        ));
     }
-    queries::add_region_block(&state.db.pg, &code).await.map_err(err)?;
+    queries::add_region_block(&state.db.pg, &code)
+        .await
+        .map_err(err)?;
     Ok(Json(json!({ "status": "banned" })))
 }
 
@@ -57,7 +64,9 @@ pub async fn remove_region_block(
     Path(country_code): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_admin(&user)?;
-    queries::remove_region_block(&state.db.pg, &country_code.to_uppercase()).await.map_err(err)?;
+    queries::remove_region_block(&state.db.pg, &country_code.to_uppercase())
+        .await
+        .map_err(err)?;
     Ok(Json(json!({ "status": "unbanned" })))
 }
 
@@ -80,7 +89,9 @@ pub async fn add_port_block(
     Json(payload): Json<PortBlockReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_admin(&user)?;
-    queries::add_port_block(&state.db.pg, payload.port).await.map_err(err)?;
+    queries::add_port_block(&state.db.pg, payload.port)
+        .await
+        .map_err(err)?;
     Ok(Json(json!({ "status": "banned", "port": payload.port })))
 }
 
@@ -90,7 +101,9 @@ pub async fn remove_port_block(
     Path(port): Path<u16>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_admin(&user)?;
-    queries::remove_port_block(&state.db.pg, port).await.map_err(err)?;
+    queries::remove_port_block(&state.db.pg, port)
+        .await
+        .map_err(err)?;
     Ok(Json(json!({ "status": "unbanned", "port": port })))
 }
 
@@ -132,10 +145,12 @@ pub async fn list_users(
     user: AuthUser,
 ) -> Result<Json<Vec<crate::models::UserOverview>>, (StatusCode, String)> {
     require_admin(&user)?;
-    Ok(Json(queries::users_overview(&state.db.pg).await.map_err(err)?))
+    Ok(Json(
+        queries::users_overview(&state.db.pg).await.map_err(err)?,
+    ))
 }
 
-/// DELETE /api/admin/users/{id} — remove a user and (by FK cascade) their tunnels,
+/// DELETE /api/admin/users/{id} - remove a user and (by FK cascade) their tunnels,
 /// freeing the ports. Live sessions are dropped first (best-effort).
 pub async fn delete_user(
     State(state): State<SharedState>,
@@ -144,16 +159,26 @@ pub async fn delete_user(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_admin(&user)?;
     if user_id == user.user_id {
-        return Err((StatusCode::BAD_REQUEST, "you cannot delete your own admin account".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "you cannot delete your own admin account".into(),
+        ));
     }
-    for (_, sub, node_id) in queries::owner_tunnel_targets(&state.db.pg, user_id).await.map_err(err)? {
+    for (_, sub, node_id) in queries::owner_tunnel_targets(&state.db.pg, user_id)
+        .await
+        .map_err(err)?
+    {
         crate::handlers::tunnels::signal_node_stop(&state, &sub, &node_id).await;
     }
-    let n = queries::delete_user(&state.db.pg, user_id).await.map_err(err)?;
+    let n = queries::delete_user(&state.db.pg, user_id)
+        .await
+        .map_err(err)?;
     if n == 0 {
         return Err((StatusCode::NOT_FOUND, "no such user".into()));
     }
-    Ok(Json(json!({ "status": "user_deleted", "user_id": user_id })))
+    Ok(Json(
+        json!({ "status": "user_deleted", "user_id": user_id }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -161,7 +186,7 @@ pub struct BanReq {
     pub banned: bool,
 }
 
-/// PATCH /api/admin/users/{id} — ban or unban a user. Banning drops their live
+/// PATCH /api/admin/users/{id} - ban or unban a user. Banning drops their live
 /// tunnels (and marks them stopped); banned users cannot log in or reserve.
 pub async fn set_user_ban(
     State(state): State<SharedState>,
@@ -171,16 +196,26 @@ pub async fn set_user_ban(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_admin(&user)?;
     if user_id == user.user_id {
-        return Err((StatusCode::BAD_REQUEST, "you cannot ban your own admin account".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "you cannot ban your own admin account".into(),
+        ));
     }
-    queries::set_user_banned(&state.db.pg, user_id, req.banned).await.map_err(err)?;
+    queries::set_user_banned(&state.db.pg, user_id, req.banned)
+        .await
+        .map_err(err)?;
     if req.banned {
-        for (tid, sub, node_id) in queries::owner_tunnel_targets(&state.db.pg, user_id).await.map_err(err)? {
+        for (tid, sub, node_id) in queries::owner_tunnel_targets(&state.db.pg, user_id)
+            .await
+            .map_err(err)?
+        {
             crate::handlers::tunnels::signal_node_stop(&state, &sub, &node_id).await;
             let _ = queries::stop_tunnel_keep(&state.db.pg, tid).await;
         }
     }
-    Ok(Json(json!({ "status": if req.banned { "banned" } else { "unbanned" }, "user_id": user_id })))
+    Ok(Json(
+        json!({ "status": if req.banned { "banned" } else { "unbanned" }, "user_id": user_id }),
+    ))
 }
 
 // --------------------------------------------------------------------------
@@ -193,7 +228,11 @@ pub async fn list_nodes(
     user: AuthUser,
 ) -> Result<Json<Vec<crate::models::Node>>, (StatusCode, String)> {
     require_admin(&user)?;
-    Ok(Json(queries::list_nodes(&state.db.pg, false).await.map_err(err)?))
+    Ok(Json(
+        queries::list_nodes(&state.db.pg, false)
+            .await
+            .map_err(err)?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -226,6 +265,8 @@ pub async fn delete_node(
     Path(node_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_admin(&user)?;
-    queries::delete_node(&state.db.pg, &node_id).await.map_err(err)?;
+    queries::delete_node(&state.db.pg, &node_id)
+        .await
+        .map_err(err)?;
     Ok(Json(json!({ "status": "deleted", "node_id": node_id })))
 }

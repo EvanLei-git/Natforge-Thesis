@@ -1,4 +1,4 @@
-/* NatForge — shared UI helpers: line-SVG icons, auth guards, tabs, modal, toast.
+/* NatForge - shared UI helpers: line-SVG icons, auth guards, tabs, modal, toast.
    No external framework, no emoji. */
 
 // ---- Line-SVG icon set (stroke, 24x24, currentColor) ----
@@ -62,7 +62,7 @@ function escapeHtml(s) {
 // Escape a value for an inline event-handler ATTRIBUTE that is also JS,
 // e.g. onclick="fn(${escapeAttr(x)})". JSON-encode first so the value is a
 // valid JS literal (strings get quotes, " and \ escaped), then HTML-encode so
-// no ' " < > can terminate the attribute during HTML parsing — the browser
+// no ' " < > can terminate the attribute during HTML parsing - the browser
 // HTML-decodes it back before the JS engine sees it. Without this, a tunnel
 // name or email containing a quote would break out of the handler (stored XSS).
 function escapeAttr(v) {
@@ -71,7 +71,7 @@ function escapeAttr(v) {
 
 // Relative "time ago" from an ISO timestamp (for last-seen columns).
 function fmtAgo(iso) {
-    if (!iso) return '—';
+    if (!iso) return '-';
     const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
     if (s < 60) return 'just now';
     if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -157,7 +157,7 @@ function nfPrompt({ title = 'Edit', message = '', fields = [], confirmText = 'Sa
         // Inputs are built STRUCTURALLY here (no user data in the markup); their
         // value / placeholder / pattern / type / key are assigned as DOM *properties*
         // after parsing, so nothing user-controlled is ever interpreted as HTML or
-        // an attribute — closing the attribute-injection surface entirely. Only the
+        // an attribute - closing the attribute-injection surface entirely. Only the
         // label/hint text (a safe text context) is interpolated, via escapeHtml.
         const fieldHtml = fields.map(f =>
             `<div class="field">
@@ -205,15 +205,15 @@ function nfPrompt({ title = 'Edit', message = '', fields = [], confirmText = 'Sa
 // nfPrompt fields for editing a tunnel: subdomain (the public address), display
 // name, and one label field per route. The route's mode:port is shown read-only in
 // the field label because the local port is the AGENT's own machine port (set via
-// `--route`, and part of the reservation's idempotency key) — not server-editable.
+// `--route`, and part of the reservation's idempotency key) - not server-editable.
 function tunnelEditFields(t) {
     const fields = [
-        { key: 'subdomain', label: 'Subdomain', hint: `(.${t.public_host} — lowercase, 3–30 chars)`,
+        { key: 'subdomain', label: 'Subdomain', hint: `(.${t.public_host} - lowercase, 3–30 chars)`,
           value: t.subdomain, maxlength: 30, pattern: '[a-z0-9-]{3,30}' },
         { key: 'name', label: 'Display name', hint: '(optional)', value: t.name || '', maxlength: 60 },
     ];
     (t.routes || []).forEach(r => fields.push({
-        key: 'label_' + r.route_id, label: `Route ${r.mode}:${r.local_port} — label`,
+        key: 'label_' + r.route_id, label: `Route ${r.mode}:${r.local_port} - label`,
         hint: '(optional)', value: r.label || '', maxlength: 40,
     }));
     return fields;

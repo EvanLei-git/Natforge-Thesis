@@ -9,7 +9,7 @@
 //!
 //! It is a single `poll_fn` state machine, so it holds exactly one mutable borrow
 //! of the connection (the borrow checker rejects driving it from multiple
-//! `select!` arms — which is the correct constraint).
+//! `select!` arms - which is the correct constraint).
 
 use std::collections::VecDeque;
 use std::task::Poll;

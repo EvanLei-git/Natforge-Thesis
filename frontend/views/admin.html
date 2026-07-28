@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NatForge — Admin</title>
+    <title>NatForge - Admin</title>
     <link rel="icon" href="../assets/img/natforge_flake.ico">
     <link href="../assets/css/style.css" rel="stylesheet">
 </head>
@@ -55,7 +55,7 @@
             <div class="card">
                 <div class="card-head"><h5>Regions (data-plane nodes)</h5></div>
                 <div class="card-body">
-                    <p class="muted small">Each region is a data-plane VM running <code>core_proxy_backend</code>. A node self-registers on boot with its own wildcard host + public TCP port pool; rename it, set a human region label, toggle whether users may place new tunnels there, or remove a decommissioned node. To add a region (e.g. a VM in Bulgaria), deploy a core there with a unique <code>NODE_ID</code>, a <code>PUBLIC_HOST</code> like <code>bg.natforge.com</code>, a reachable <code>CONTROL_ENDPOINT</code> / <code>INTERNAL_URL</code>, and point <code>WEBSITE_URL</code> here — it appears below automatically.</p>
+                    <p class="muted small">Each region is a data-plane VM running <code>core_proxy_backend</code>. A node self-registers on boot with its own wildcard host + public TCP port pool; rename it, set a human region label, toggle whether users may place new tunnels there, or remove a decommissioned node. To add a region (e.g. a VM in Bulgaria), deploy a core there with a unique <code>NODE_ID</code>, a <code>PUBLIC_HOST</code> like <code>bg.natforge.com</code>, a reachable <code>CONTROL_ENDPOINT</code> / <code>INTERNAL_URL</code>, and point <code>WEBSITE_URL</code> here - it appears below automatically.</p>
                     <div class="card-body flush"><table class="table">
                         <thead><tr><th>Node</th><th>Region</th><th>Public host</th><th>Last seen</th><th>Available</th><th></th></tr></thead>
                         <tbody id="nodeRows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
@@ -128,7 +128,7 @@
         function routeBadges(t) { return t.routes.map(r => `<span class="badge ${r.mode}">${r.mode}:${r.local_port}</span>`).join(' '); }
         function renderTunnels(list) {
             document.getElementById('allTunnels').innerHTML = list.length ? list.map(t =>
-                `<tr><td><div class="host">${t.full_host}</div><div class="faint small">#${t.tunnel_id} &middot; agent ${t.agent_ip || '—'}</div></td>
+                `<tr><td><div class="host">${t.full_host}</div><div class="faint small">#${t.tunnel_id} &middot; agent ${t.agent_ip || '-'}</div></td>
                  <td><span class="badge ${t.status}">${t.status.replace('_',' ')}</span></td>
                  <td>${routeBadges(t)}</td>
                  <td class="faint small">${fmtBytes(t.bytes_in)} / ${fmtBytes(t.bytes_out)}</td></tr>`
@@ -141,7 +141,7 @@
                 const avail = n.active ? '<span class="badge online">yes</span>' : '<span class="badge offline">no</span>';
                 return `<tr>
                     <td><div class="host">${escapeHtml(n.name)}</div><div class="faint small">${escapeHtml(n.node_id)}</div></td>
-                    <td>${n.region ? `<span class="badge tag">${escapeHtml(n.region)}</span>` : '<span class="faint small">—</span>'}</td>
+                    <td>${n.region ? `<span class="badge tag">${escapeHtml(n.region)}</span>` : '<span class="faint small">-</span>'}</td>
                     <td><span class="endpoint">${escapeHtml(n.public_host)}</span><div class="faint small">ctrl ${escapeHtml(n.control_endpoint)}</div></td>
                     <td class="faint small">${seen}</td>
                     <td>${avail}</td>
@@ -156,7 +156,7 @@
         async function editNode(id, name, region, active) {
             const r = await nfPrompt({ title: 'Edit node', confirmText: 'Save', fields: [
                 { key: 'name', label: 'Node display name', value: name },
-                { key: 'region', label: 'Region label', hint: '(e.g. Germany, Bulgaria — blank for none)', value: region },
+                { key: 'region', label: 'Region label', hint: '(e.g. Germany, Bulgaria - blank for none)', value: region },
             ] });
             if (r === null) return;
             try { await API.updateNode(id, { name: r.name.trim() || name, region: r.region.trim() || null, active }); refresh(); }

@@ -1,17 +1,17 @@
 //! Authentication: registration, login, and the RFC 8628 device-authorization
 //! grant (device codes stored in Redis with a TTL).
 
-use argon2::password_hash::{rand_core::OsRng, PasswordHasher, SaltString};
+use argon2::password_hash::{PasswordHasher, SaltString, rand_core::OsRng};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use axum::http::{HeaderMap, StatusCode};
-use axum::{extract::State, Json};
+use axum::{Json, extract::State};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::db::connection::SharedState;
 use crate::db::{connection, queries};
-use crate::jwt::{issue_session, AuthUser};
+use crate::jwt::{AuthUser, issue_session};
 
 /// Reject the request if the caller's country is on the admin region-block list.
 /// No GeoIP data (or a direct/local connection) means "unknown" → allowed.
@@ -26,7 +26,10 @@ async fn geo_gate(state: &SharedState, headers: &HeaderMap) -> Result<(), (Statu
         .any(|c| c.eq_ignore_ascii_case(&country));
     if blocked {
         tracing::warn!("rejected auth from geo-blocked country {country}");
-        return Err((StatusCode::FORBIDDEN, format!("access from your region ({country}) is blocked")));
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!("access from your region ({country}) is blocked"),
+        ));
     }
     Ok(())
 }
@@ -54,13 +57,18 @@ pub(crate) fn hash_password(password: &str) -> String {
 
 pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
     match PasswordHash::new(hash) {
-        Ok(parsed) => Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok(),
+        Ok(parsed) => Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok(),
         Err(_) => false,
     }
 }
 
 fn db_err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, format!("database error: {e}"))
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("database error: {e}"),
+    )
 }
 
 pub async fn register_user(
@@ -71,17 +79,38 @@ pub async fn register_user(
     geo_gate(&state, &headers).await?;
     let email = payload.email.trim().to_lowercase();
     if email.is_empty() || payload.password.len() < 8 {
-        return Err((StatusCode::BAD_REQUEST, "email required and password must be at least 8 characters".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "email required and password must be at least 8 characters".into(),
+        ));
     }
-    if queries::user_by_email(&state.db.pg, &email).await.map_err(db_err)?.is_some() {
+    if queries::user_by_email(&state.db.pg, &email)
+        .await
+        .map_err(db_err)?
+        .is_some()
+    {
         return Err((StatusCode::CONFLICT, "email already registered".into()));
     }
-    let user = queries::create_user(&state.db.pg, &email, &hash_password(&payload.password), &state.config.admin_email)
-        .await
-        .map_err(db_err)?;
-    tracing::info!("registered {} (id {}, role {})", user.email, user.id, user.role);
+    let user = queries::create_user(
+        &state.db.pg,
+        &email,
+        &hash_password(&payload.password),
+        &state.config.admin_email,
+    )
+    .await
+    .map_err(db_err)?;
+    tracing::info!(
+        "registered {} (id {}, role {})",
+        user.email,
+        user.id,
+        user.role
+    );
     let token = issue_session(&state.config.jwt_secret, user.id, &user.email, &user.role);
-    Ok(Json(AuthResponse { token, role: user.role, status: "registered".into() }))
+    Ok(Json(AuthResponse {
+        token,
+        role: user.role,
+        status: "registered".into(),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -97,7 +126,9 @@ pub async fn login_user(
 ) -> Result<Json<AuthResponse>, (StatusCode, String)> {
     geo_gate(&state, &headers).await?;
     let email = payload.email.trim().to_lowercase();
-    let user = queries::user_by_email(&state.db.pg, &email).await.map_err(db_err)?;
+    let user = queries::user_by_email(&state.db.pg, &email)
+        .await
+        .map_err(db_err)?;
     let user = user
         .filter(|u| verify_password(&payload.password, &u.password_hash))
         .ok_or((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()))?;
@@ -105,7 +136,11 @@ pub async fn login_user(
         return Err((StatusCode::FORBIDDEN, "this account is banned".into()));
     }
     let token = issue_session(&state.config.jwt_secret, user.id, &user.email, &user.role);
-    Ok(Json(AuthResponse { token, role: user.role, status: "ok".into() }))
+    Ok(Json(AuthResponse {
+        token,
+        role: user.role,
+        status: "ok".into(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +149,9 @@ pub async fn login_user(
 
 fn random_code(len: usize, charset: &[u8]) -> String {
     let mut rng = rand::thread_rng();
-    (0..len).map(|_| charset[rng.gen_range(0..charset.len())] as char).collect()
+    (0..len)
+        .map(|_| charset[rng.gen_range(0..charset.len())] as char)
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -171,12 +208,17 @@ pub async fn device_token(
                 if !won {
                     return Ok(Json(json!({ "status": "expired_token" })));
                 }
-                let user = queries::user_by_id(&state.db.pg, uid).await.map_err(db_err)?;
+                let user = queries::user_by_id(&state.db.pg, uid)
+                    .await
+                    .map_err(db_err)?;
                 match user {
                     Some(u) if u.banned => Ok(Json(json!({ "status": "banned" }))),
                     Some(u) => {
-                        let token = issue_session(&state.config.jwt_secret, u.id, &u.email, &u.role);
-                        Ok(Json(json!({ "status": "approved", "token": token, "role": u.role })))
+                        let token =
+                            issue_session(&state.config.jwt_secret, u.id, &u.email, &u.role);
+                        Ok(Json(
+                            json!({ "status": "approved", "token": token, "role": u.role }),
+                        ))
                     }
                     None => Ok(Json(json!({ "status": "expired_token" }))),
                 }

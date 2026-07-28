@@ -4,16 +4,16 @@
 //! a persistent yamux session to the core proxy. The agent is the yamux *server*:
 //! it accepts one inbound stream per public connection, reads the per-stream
 //! preamble to learn which route the stream belongs to, dials the matching local
-//! port, replays any peeked bytes, and copies bidirectionally — all in memory.
+//! port, replays any peeked bytes, and copies bidirectionally - all in memory.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
-use tokio::io::{copy_bidirectional, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional};
 use tokio::net::TcpStream;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{error, info, warn};
@@ -22,7 +22,7 @@ use yamux::{Config as YamuxConfig, Connection, Mode};
 // Handshake + preamble wire contract lives in the shared `natforge-proto` crate so
 // the agent and core can never drift; the agent only *reads* preambles (the core
 // writes them) and exchanges two length-prefixed JSON frames before the yamux upgrade.
-use natforge_proto::{read_preamble, AgentHello, AgentRouteBinding, CoreReply, RouteMode};
+use natforge_proto::{AgentHello, AgentRouteBinding, CoreReply, RouteMode, read_preamble};
 
 const MAX_FRAME: u32 = 1 << 20;
 
@@ -81,7 +81,7 @@ struct Reservation {
     full_host: String,
     tunnel_token: String,
     routes: Vec<ReservedRoute>,
-    /// host:port of the node hosting this tunnel — where the agent connects.
+    /// host:port of the node hosting this tunnel - where the agent connects.
     control_endpoint: String,
     region: Option<String>,
     node_id: String,
@@ -98,7 +98,10 @@ async fn reserve(
     let body = RequestTunnelReq {
         routes: specs
             .iter()
-            .map(|s| RequestedRoute { mode: s.mode, local_port: s.local_port })
+            .map(|s| RequestedRoute {
+                mode: s.mode,
+                local_port: s.local_port,
+            })
             .collect(),
         node_id: node_id.map(|s| s.to_string()),
     };
@@ -130,21 +133,26 @@ pub async fn run(
         reservation.tunnel_id,
         reservation.subdomain,
         reservation.full_host,
-        reservation.region.as_deref().unwrap_or(&reservation.node_id),
+        reservation
+            .region
+            .as_deref()
+            .unwrap_or(&reservation.node_id),
         reservation.routes.len()
     );
 
     loop {
         // Connect to the node hosting the tunnel; --tunnel-server overrides (dev).
-        let target = tunnel_server.unwrap_or(reservation.control_endpoint.as_str()).to_string();
+        let target = tunnel_server
+            .unwrap_or(reservation.control_endpoint.as_str())
+            .to_string();
         match connect_and_serve(&target, &reservation).await {
             Ok(()) => warn!("tunnel session ended; reconnecting in 3s…"),
             Err(e) => warn!("tunnel error ({e}); reconnecting in 3s…"),
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
 
-        // Refresh the reservation before every reconnect so control-plane edits —
-        // a new subdomain, route labels, or a re-minted token — take effect on a
+        // Refresh the reservation before every reconnect so control-plane edits -
+        // a new subdomain, route labels, or a re-minted token - take effect on a
         // live tunnel. reserve() is idempotent by route signature: it returns the
         // SAME tunnel (same dedicated ports) with the current subdomain and a fresh
         // token, or leaves us on the existing reservation if the control plane is
@@ -172,12 +180,19 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
 
     // route_id -> local_port, learned from the reservation.
     let routes: Arc<HashMap<u16, u16>> = Arc::new(
-        reservation.routes.iter().map(|r| (r.route_id, r.local_port)).collect(),
+        reservation
+            .routes
+            .iter()
+            .map(|r| (r.route_id, r.local_port))
+            .collect(),
     );
     let bindings: Vec<AgentRouteBinding> = reservation
         .routes
         .iter()
-        .map(|r| AgentRouteBinding { route_id: r.route_id, local_port: r.local_port })
+        .map(|r| AgentRouteBinding {
+            route_id: r.route_id,
+            local_port: r.local_port,
+        })
         .collect();
 
     let hello = AgentHello {
@@ -189,16 +204,25 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
 
     let reply: CoreReply = serde_json::from_slice(&read_frame(&mut socket).await?)?;
     match reply {
-        CoreReply::Ok { tunnel_id, subdomain, routes: confirmed } => {
+        CoreReply::Ok {
+            tunnel_id,
+            subdomain,
+            routes: confirmed,
+        } => {
             info!("════════════════════════════════════════════════════");
             info!(" Tunnel LIVE  (tunnel {tunnel_id}, subdomain {subdomain})");
             for r in &confirmed {
                 let local = routes.get(&r.route_id).copied().unwrap_or(0);
-                info!("   route {} [{:?}]  {}  ->  127.0.0.1:{}", r.route_id, r.mode, r.public_endpoint, local);
+                info!(
+                    "   route {} [{:?}]  {}  ->  127.0.0.1:{}",
+                    r.route_id, r.mode, r.public_endpoint, local
+                );
             }
             info!("════════════════════════════════════════════════════");
         }
-        CoreReply::Error { message } => return Err(anyhow!("core proxy rejected tunnel: {message}")),
+        CoreReply::Error { message } => {
+            return Err(anyhow!("core proxy rejected tunnel: {message}"));
+        }
     }
 
     // Upgrade to a yamux server session.
@@ -240,11 +264,11 @@ async fn handle_stream(stream: yamux::Stream, routes: Arc<HashMap<u16, u16>>) {
         }
     };
     // Replay the bytes the core peeked for routing (HTTP request / TLS ClientHello).
-    if !replay.is_empty() {
-        if let Err(e) = local.write_all(&replay).await {
-            warn!("failed writing replay to local service: {e}");
-            return;
-        }
+    if !replay.is_empty()
+        && let Err(e) = local.write_all(&replay).await
+    {
+        warn!("failed writing replay to local service: {e}");
+        return;
     }
     if let Err(e) = copy_bidirectional(&mut remote, &mut local).await {
         warn!("local relay closed: {e}");

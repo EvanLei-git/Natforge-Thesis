@@ -43,7 +43,7 @@ pub struct RouteRow {
     pub label: Option<String>,
 }
 
-/// `nodes` row — a data-plane VM / region.
+/// `nodes` row - a data-plane VM / region.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize)]
 pub struct Node {
     pub node_id: String,

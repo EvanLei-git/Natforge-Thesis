@@ -75,11 +75,22 @@ pub async fn tunnel_up(state: &Arc<CoreState>, tunnel_id: i64, _subdomain: &str,
 }
 
 pub async fn tunnel_down(state: &Arc<CoreState>, tunnel_id: i64, subdomain: &str) {
-    post(state, "/api/internal/tunnel_down", json!({ "tunnel_id": tunnel_id })).await;
+    post(
+        state,
+        "/api/internal/tunnel_down",
+        json!({ "tunnel_id": tunnel_id }),
+    )
+    .await;
     redis_mirror_down(state, subdomain).await;
 }
 
-pub async fn report_bandwidth(state: &Arc<CoreState>, tunnel_id: i64, owner_id: i32, bytes_in: u64, bytes_out: u64) {
+pub async fn report_bandwidth(
+    state: &Arc<CoreState>,
+    tunnel_id: i64,
+    owner_id: i32,
+    bytes_in: u64,
+    bytes_out: u64,
+) {
     post(
         state,
         "/api/internal/bandwidth",
@@ -136,35 +147,38 @@ pub async fn refresh_policy(state: &Arc<CoreState>) {
         .header(INTERNAL_HEADER, &state.config.internal_secret)
         .send()
         .await;
-    if let Ok(r) = resp {
-        if let Ok(v) = r.json::<serde_json::Value>().await {
-            if let Some(ports) = v.get("blocked_ports").and_then(|p| p.as_array()) {
-                let list: Vec<u16> = ports.iter().filter_map(|p| p.as_u64().map(|n| n as u16)).collect();
-                *state.blocked_ports.write().await = list;
-            }
-            if let Some(regions) = v.get("blocked_regions").and_then(|p| p.as_array()) {
-                let list: Vec<String> = regions
-                    .iter()
-                    .filter_map(|c| c.as_str().map(|s| s.to_uppercase()))
-                    .collect();
-                *state.blocked_regions.write().await = list;
-            }
-            // tunnel_region_blocks: { "<tunnel_id>": ["US","DE"], ... }
-            if let Some(map) = v.get("tunnel_region_blocks").and_then(|m| m.as_object()) {
-                let mut out = std::collections::HashMap::new();
-                for (k, val) in map {
-                    if let (Ok(tid), Some(arr)) = (k.parse::<i64>(), val.as_array()) {
-                        let codes: Vec<String> = arr
-                            .iter()
-                            .filter_map(|c| c.as_str().map(|s| s.to_uppercase()))
-                            .collect();
-                        if !codes.is_empty() {
-                            out.insert(tid, codes);
-                        }
+    if let Ok(r) = resp
+        && let Ok(v) = r.json::<serde_json::Value>().await
+    {
+        if let Some(ports) = v.get("blocked_ports").and_then(|p| p.as_array()) {
+            let list: Vec<u16> = ports
+                .iter()
+                .filter_map(|p| p.as_u64().map(|n| n as u16))
+                .collect();
+            *state.blocked_ports.write().await = list;
+        }
+        if let Some(regions) = v.get("blocked_regions").and_then(|p| p.as_array()) {
+            let list: Vec<String> = regions
+                .iter()
+                .filter_map(|c| c.as_str().map(|s| s.to_uppercase()))
+                .collect();
+            *state.blocked_regions.write().await = list;
+        }
+        // tunnel_region_blocks: { "<tunnel_id>": ["US","DE"], ... }
+        if let Some(map) = v.get("tunnel_region_blocks").and_then(|m| m.as_object()) {
+            let mut out = std::collections::HashMap::new();
+            for (k, val) in map {
+                if let (Ok(tid), Some(arr)) = (k.parse::<i64>(), val.as_array()) {
+                    let codes: Vec<String> = arr
+                        .iter()
+                        .filter_map(|c| c.as_str().map(|s| s.to_uppercase()))
+                        .collect();
+                    if !codes.is_empty() {
+                        out.insert(tid, codes);
                     }
                 }
-                *state.tunnel_region_blocks.write().await = out;
             }
+            *state.tunnel_region_blocks.write().await = out;
         }
     }
 }
@@ -182,7 +196,9 @@ pub async fn redis_mirror_up(
     let mut conn = state.redis.clone();
     let node = &state.config.node_id;
     let live = format!("nf:tunnel:live:{subdomain}");
-    let _: Result<(), _> = conn.set_ex(&live, format!("{node}:{tunnel_id}"), LIVE_TTL as u64).await;
+    let _: Result<(), _> = conn
+        .set_ex(&live, format!("{node}:{tunnel_id}"), LIVE_TTL as u64)
+        .await;
     if has_http || has_https {
         let hk = format!("nf:route:host:{subdomain}");
         let _: Result<(), _> = conn.set_ex(&hk, node, LIVE_TTL as u64).await;

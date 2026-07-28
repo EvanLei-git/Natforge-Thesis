@@ -1,14 +1,14 @@
 //! Service-host tunnel reservation, listing, and teardown.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::db::connection::SharedState;
 use crate::db::queries::{self, ReserveError};
-use crate::jwt::{issue_tunnel_token, AuthUser};
+use crate::jwt::{AuthUser, issue_tunnel_token};
 use crate::models::{RequestedRoute, TunnelView};
 use natforge_proto::{RouteClaim, RouteMode};
 
@@ -69,11 +69,17 @@ pub async fn request_tunnel(
     user: AuthUser,
     Json(req): Json<RequestTunnelReq>,
 ) -> Result<Json<TunnelRequestRes>, (StatusCode, String)> {
-    if queries::is_user_banned(&state.db.pg, user.user_id).await.unwrap_or(false) {
+    if queries::is_user_banned(&state.db.pg, user.user_id)
+        .await
+        .unwrap_or(false)
+    {
         return Err((StatusCode::FORBIDDEN, "this account is banned".into()));
     }
     if req.routes.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "at least one route is required".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "at least one route is required".into(),
+        ));
     }
     // Per-tunnel route policy: <= 1 http, <= 1 https, <= 2 tcp.
     let (mut http, mut https, mut tcp) = (0, 0, 0);
@@ -85,7 +91,10 @@ pub async fn request_tunnel(
         }
     }
     if http > 1 || https > 1 || tcp > 2 {
-        return Err((StatusCode::BAD_REQUEST, "at most 1 http, 1 https and 2 tcp routes per tunnel".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "at most 1 http, 1 https and 2 tcp routes per tunnel".into(),
+        ));
     }
     // Reject globally blocked local ports up front.
     for r in &req.routes {
@@ -93,22 +102,42 @@ pub async fn request_tunnel(
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         {
-            return Err((StatusCode::FORBIDDEN, format!("local port {} is globally blocked", r.local_port)));
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!("local port {} is globally blocked", r.local_port),
+            ));
         }
     }
 
-    let requested: Vec<(RouteMode, u16, Option<String>)> =
-        req.routes.iter().map(|r| (r.mode, r.local_port, r.label.clone())).collect();
-    let custom = req.subdomain.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let requested: Vec<(RouteMode, u16, Option<String>)> = req
+        .routes
+        .iter()
+        .map(|r| (r.mode, r.local_port, r.label.clone()))
+        .collect();
+    let custom = req
+        .subdomain
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
     // Pick the node/region: the requested one (must exist + be active), else the default.
     let db_err = |e: anyhow::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     let node = match &req.node_id {
-        Some(nid) => queries::get_node(&state.db.pg, nid).await.map_err(db_err)?
+        Some(nid) => queries::get_node(&state.db.pg, nid)
+            .await
+            .map_err(db_err)?
             .filter(|n| n.active)
-            .ok_or((StatusCode::BAD_REQUEST, "unknown or inactive region".to_string()))?,
-        None => queries::default_node(&state.db.pg).await.map_err(db_err)?
-            .ok_or((StatusCode::SERVICE_UNAVAILABLE, "no region/node is available yet".to_string()))?,
+            .ok_or((
+                StatusCode::BAD_REQUEST,
+                "unknown or inactive region".to_string(),
+            ))?,
+        None => queries::default_node(&state.db.pg)
+            .await
+            .map_err(db_err)?
+            .ok_or((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no region/node is available yet".to_string(),
+            ))?,
     };
 
     let reserved = queries::reserve_tunnel(
@@ -122,12 +151,26 @@ pub async fn request_tunnel(
     )
     .await
     .map_err(|e| match e {
-        ReserveError::LimitReached(n) => (StatusCode::FORBIDDEN, format!("tunnel limit reached ({n})")),
-        ReserveError::PortExhausted => (StatusCode::SERVICE_UNAVAILABLE, "public TCP port pool exhausted".into()),
+        ReserveError::LimitReached(n) => {
+            (StatusCode::FORBIDDEN, format!("tunnel limit reached ({n})"))
+        }
+        ReserveError::PortExhausted => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "public TCP port pool exhausted".into(),
+        ),
         ReserveError::BlockedPort(p) => (StatusCode::FORBIDDEN, format!("port {p} is blocked")),
-        ReserveError::BadSubdomain => (StatusCode::BAD_REQUEST, "invalid subdomain: use 3–30 chars of a–z, 0–9 and '-'".into()),
-        ReserveError::SubdomainTaken(s) => (StatusCode::CONFLICT, format!("subdomain '{s}' is already taken")),
-        ReserveError::Db(err) => (StatusCode::INTERNAL_SERVER_ERROR, format!("database error: {err}")),
+        ReserveError::BadSubdomain => (
+            StatusCode::BAD_REQUEST,
+            "invalid subdomain: use 3–30 chars of a–z, 0–9 and '-'".into(),
+        ),
+        ReserveError::SubdomainTaken(s) => (
+            StatusCode::CONFLICT,
+            format!("subdomain '{s}' is already taken"),
+        ),
+        ReserveError::Db(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("database error: {err}"),
+        ),
     })?;
 
     // The tunnel's actual node (reuse may keep an existing node); fall back to chosen.
@@ -153,7 +196,12 @@ pub async fn request_tunnel(
         } else {
             None
         };
-        claims.push(RouteClaim { route_id: r.route_id as u16, mode, host: route_host, public_port });
+        claims.push(RouteClaim {
+            route_id: r.route_id as u16,
+            mode,
+            host: route_host,
+            public_port,
+        });
         views.push(ReservedRoute {
             route_id: r.route_id as u16,
             mode: r.kind.clone(),
@@ -173,7 +221,11 @@ pub async fn request_tunnel(
 
     tracing::info!(
         "user {} reserved tunnel {} ({}) {} routes (reused={})",
-        user.user_id, reserved.tunnel_id, reserved.subdomain, reserved.routes.len(), reserved.reused
+        user.user_id,
+        reserved.tunnel_id,
+        reserved.subdomain,
+        reserved.routes.len(),
+        reserved.reused
     );
 
     Ok(Json(TunnelRequestRes {
@@ -182,7 +234,12 @@ pub async fn request_tunnel(
         subdomain: reserved.subdomain,
         tunnel_token: token,
         routes: views,
-        status: if reserved.reused { "reused" } else { "reserved" }.into(),
+        status: if reserved.reused {
+            "reused"
+        } else {
+            "reserved"
+        }
+        .into(),
         control_endpoint: host_node.control_endpoint,
         region: host_node.region,
         node_id: host_node.node_id,
@@ -190,7 +247,10 @@ pub async fn request_tunnel(
     }))
 }
 
-pub async fn get_tunnels(State(state): State<SharedState>, user: AuthUser) -> Json<Vec<TunnelView>> {
+pub async fn get_tunnels(
+    State(state): State<SharedState>,
+    user: AuthUser,
+) -> Json<Vec<TunnelView>> {
     let tunnels = queries::tunnels_for_owner(&state.db.pg, user.user_id)
         .await
         .unwrap_or_default();
@@ -214,7 +274,7 @@ async fn authorize_tunnel(
     Ok(owner)
 }
 
-/// GET /api/tunnels/{id}/bandwidth — current totals + a recent cumulative series.
+/// GET /api/tunnels/{id}/bandwidth - current totals + a recent cumulative series.
 pub async fn tunnel_bandwidth(
     State(state): State<SharedState>,
     user: AuthUser,
@@ -224,7 +284,10 @@ pub async fn tunnel_bandwidth(
     let mut series = queries::bandwidth_series(&state.db.pg, tunnel_id, 100)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let (bytes_in, bytes_out) = series.first().map(|s| (s.bytes_in, s.bytes_out)).unwrap_or((0, 0));
+    let (bytes_in, bytes_out) = series
+        .first()
+        .map(|s| (s.bytes_in, s.bytes_out))
+        .unwrap_or((0, 0));
     series.reverse(); // chronological for charting
     Ok(Json(json!({
         "tunnel_id": tunnel_id,
@@ -235,7 +298,7 @@ pub async fn tunnel_bandwidth(
     })))
 }
 
-/// GET /api/tunnels/{id}/logs — recent per-connection log entries.
+/// GET /api/tunnels/{id}/logs - recent per-connection log entries.
 pub async fn tunnel_logs(
     State(state): State<SharedState>,
     user: AuthUser,
@@ -248,7 +311,7 @@ pub async fn tunnel_logs(
     Ok(Json(logs))
 }
 
-/// GET /api/tunnels/{id}/region_blocks — countries this tunnel refuses (alpha-2).
+/// GET /api/tunnels/{id}/region_blocks - countries this tunnel refuses (alpha-2).
 pub async fn get_tunnel_region_blocks(
     State(state): State<SharedState>,
     user: AuthUser,
@@ -266,7 +329,7 @@ pub struct SetRegionBlocksReq {
     pub country_codes: Vec<String>,
 }
 
-/// PUT /api/tunnels/{id}/region_blocks — replace this tunnel's blocked-country list.
+/// PUT /api/tunnels/{id}/region_blocks - replace this tunnel's blocked-country list.
 pub async fn set_tunnel_region_blocks(
     State(state): State<SharedState>,
     user: AuthUser,
@@ -284,7 +347,10 @@ pub async fn set_tunnel_region_blocks(
     codes.sort();
     codes.dedup();
     if codes.len() > 100 {
-        return Err((StatusCode::BAD_REQUEST, "too many countries (max 100)".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "too many countries (max 100)".into(),
+        ));
     }
     queries::set_tunnel_region_blocks(&state.db.pg, tunnel_id, &codes)
         .await
@@ -305,11 +371,17 @@ pub async fn list_regions(
     State(state): State<SharedState>,
     _user: AuthUser,
 ) -> Json<Vec<RegionOption>> {
-    let nodes = queries::list_nodes(&state.db.pg, true).await.unwrap_or_default();
+    let nodes = queries::list_nodes(&state.db.pg, true)
+        .await
+        .unwrap_or_default();
     Json(
         nodes
             .into_iter()
-            .map(|n| RegionOption { node_id: n.node_id, name: n.name, region: n.region })
+            .map(|n| RegionOption {
+                node_id: n.node_id,
+                name: n.name,
+                region: n.region,
+            })
             .collect(),
     )
 }
@@ -317,7 +389,11 @@ pub async fn list_regions(
 /// Best-effort: tell the node hosting a subdomain to drop its live yamux session
 /// (internal-secret guarded). Routed to the node's internal URL, falling back to
 /// the configured `core_url`. Reused by stop/delete and by admin ban/delete-user.
-pub(crate) async fn signal_node_stop(state: &SharedState, subdomain: &str, node_id: &Option<String>) {
+pub(crate) async fn signal_node_stop(
+    state: &SharedState,
+    subdomain: &str,
+    node_id: &Option<String>,
+) {
     let base = match node_id {
         Some(nid) => queries::get_node(&state.db.pg, nid)
             .await
@@ -353,7 +429,7 @@ async fn authorize_tunnel_owner(
     Ok((subdomain, node_id))
 }
 
-/// DELETE /api/tunnels/{id} — remove the tunnel and free its ports.
+/// DELETE /api/tunnels/{id} - remove the tunnel and free its ports.
 pub async fn delete_tunnel(
     State(state): State<SharedState>,
     user: AuthUser,
@@ -367,10 +443,12 @@ pub async fn delete_tunnel(
     if deleted == 0 {
         return Err((StatusCode::GONE, "tunnel already removed".into()));
     }
-    Ok(Json(json!({ "status": "tunnel_deleted", "tunnel_id": tunnel_id })))
+    Ok(Json(
+        json!({ "status": "tunnel_deleted", "tunnel_id": tunnel_id }),
+    ))
 }
 
-/// POST /api/tunnels/{id}/stop — drop the live session but KEEP the tunnel
+/// POST /api/tunnels/{id}/stop - drop the live session but KEEP the tunnel
 /// (status `stopped`, same subdomain/ports). Restart by re-running the agent.
 pub async fn stop_tunnel(
     State(state): State<SharedState>,
@@ -385,7 +463,9 @@ pub async fn stop_tunnel(
     if n == 0 {
         return Err((StatusCode::GONE, "tunnel already removed".into()));
     }
-    Ok(Json(json!({ "status": "tunnel_stopped", "tunnel_id": tunnel_id })))
+    Ok(Json(
+        json!({ "status": "tunnel_stopped", "tunnel_id": tunnel_id }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -408,7 +488,7 @@ pub struct EditTunnelReq {
     pub route_labels: Vec<RouteLabelEdit>,
 }
 
-/// PATCH /api/tunnels/{id} — edit a tunnel's display name, subdomain (its public
+/// PATCH /api/tunnels/{id} - edit a tunnel's display name, subdomain (its public
 /// address), and per-route labels (owner or admin). The local port is the agent's
 /// OWN machine port (set via `--route` and part of the idempotency key), so it is
 /// deliberately not editable here. A live subdomain change drops the session so the
@@ -425,9 +505,16 @@ pub async fn edit_tunnel(
     if let Some(raw) = req.name.as_ref() {
         let trimmed = raw.trim();
         if trimmed.chars().count() > 60 {
-            return Err((StatusCode::BAD_REQUEST, "name too long (max 60 chars)".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "name too long (max 60 chars)".into(),
+            ));
         }
-        let name = if trimmed.is_empty() { None } else { Some(trimmed) };
+        let name = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        };
         queries::rename_tunnel(&state.db.pg, tunnel_id, name)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -437,14 +524,17 @@ pub async fn edit_tunnel(
     for rl in &req.route_labels {
         let label = rl.label.as_deref().map(str::trim).filter(|s| !s.is_empty());
         if label.map(|s| s.chars().count() > 40).unwrap_or(false) {
-            return Err((StatusCode::BAD_REQUEST, "route label too long (max 40 chars)".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "route label too long (max 40 chars)".into(),
+            ));
         }
         queries::update_route_label(&state.db.pg, tunnel_id, rl.route_id, label)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     }
 
-    // 3) Subdomain — the actual address. Validate, ensure free, apply.
+    // 3) Subdomain - the actual address. Validate, ensure free, apply.
     let mut subdomain_changed = false;
     if let Some(raw) = req.subdomain.as_ref() {
         let want = raw.trim().to_lowercase();
@@ -453,23 +543,35 @@ pub async fn edit_tunnel(
                 return Err((StatusCode::BAD_REQUEST,
                     "invalid subdomain (3–30 chars, lowercase a–z/0–9/-, must start & end alphanumeric)".into()));
             }
-            if queries::is_reserved_subdomain(&state.db.pg, &want).await
+            if queries::is_reserved_subdomain(&state.db.pg, &want)
+                .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             {
                 return Err((StatusCode::CONFLICT, "that subdomain is reserved".into()));
             }
-            if queries::subdomain_in_use(&state.db.pg, &want, tunnel_id).await
+            if queries::subdomain_in_use(&state.db.pg, &want, tunnel_id)
+                .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
             {
-                return Err((StatusCode::CONFLICT, "that subdomain is already taken".into()));
+                return Err((
+                    StatusCode::CONFLICT,
+                    "that subdomain is already taken".into(),
+                ));
             }
-            queries::set_tunnel_subdomain(&state.db.pg, tunnel_id, &want).await
-                .map_err(|_| (StatusCode::CONFLICT, "that subdomain is already taken".into()))?;
+            queries::set_tunnel_subdomain(&state.db.pg, tunnel_id, &want)
+                .await
+                .map_err(|_| {
+                    (
+                        StatusCode::CONFLICT,
+                        "that subdomain is already taken".into(),
+                    )
+                })?;
             subdomain_changed = true;
 
             // If the tunnel is live, drop the session on the OLD subdomain so the
             // running agent re-reserves and reconnects on the new host.
-            let status = queries::tunnel_status(&state.db.pg, tunnel_id).await
+            let status = queries::tunnel_status(&state.db.pg, tunnel_id)
+                .await
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             if status.as_deref() == Some("online") {
                 signal_node_stop(&state, &current_sub, &node_id).await;

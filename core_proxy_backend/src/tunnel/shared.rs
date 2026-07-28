@@ -3,31 +3,36 @@
 //! to pick a subdomain, then open a yamux stream to that tunnel's agent and carry
 //! the peeked bytes verbatim inside the per-stream preamble's replay field, so the
 //! origin service receives a byte-exact request / ClientHello. No TLS is
-//! terminated — :443 is pure L4 passthrough (the core never sees plaintext).
+//! terminated - :443 is pure L4 passthrough (the core never sees plaintext).
 //!
 //! Routing is per-connection (first Host/SNI wins). HTTP/1.1 keep-alive across
 //! different subdomains on one connection is out of scope (matches the L4 model).
 
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use tokio::io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info, warn};
 
 use crate::state::{CoreState, OpenStream};
-use natforge_proto::{encode_preamble, RouteMode};
+use natforge_proto::{RouteMode, encode_preamble};
 
 const PEEK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Extract the routing subdomain (leftmost label) from a hostname, stripping any
 /// port and trailing dot. "duck-a1b2.natforge.com:8080" -> "duck-a1b2".
 fn subdomain_of(host: &str) -> String {
-    let host = host.split(':').next().unwrap_or(host).trim().trim_end_matches('.');
+    let host = host
+        .split(':')
+        .next()
+        .unwrap_or(host)
+        .trim()
+        .trim_end_matches('.');
     host.split('.').next().unwrap_or(host).to_ascii_lowercase()
 }
 
@@ -67,7 +72,9 @@ async fn serve_http(state: Arc<CoreState>, mut inbound: TcpStream, peer: SocketA
         if let Some(h) = parse_host(&buf) {
             break h;
         }
-        if find_subsequence(&buf, b"\r\n\r\n").is_some() || buf.len() >= state.config.max_header_bytes {
+        if find_subsequence(&buf, b"\r\n\r\n").is_some()
+            || buf.len() >= state.config.max_header_bytes
+        {
             // Headers complete (or too big) with no usable Host.
             let _ = inbound
                 .write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 11\r\n\r\nbad request")
@@ -77,7 +84,13 @@ async fn serve_http(state: Arc<CoreState>, mut inbound: TcpStream, peer: SocketA
     };
     // The bare apex (and `www.`) is the control-plane dashboard, not a tunnel:
     // forward those to the website backend instead of subdomain-routing them.
-    let hostname = host.split(':').next().unwrap_or(&host).trim().trim_end_matches('.').to_ascii_lowercase();
+    let hostname = host
+        .split(':')
+        .next()
+        .unwrap_or(&host)
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
     let apex = state.config.public_host.to_ascii_lowercase();
     if hostname == apex || hostname == format!("www.{apex}") {
         proxy_to_dashboard(inbound, buf, &state.config.dashboard_addr).await;
@@ -89,7 +102,7 @@ async fn serve_http(state: Arc<CoreState>, mut inbound: TcpStream, peer: SocketA
 
 /// Forward a plain-HTTP connection (the apex / www host) to the local dashboard
 /// (`website_backend`). The bytes already peeked for the Host header are replayed
-/// first, then the streams are spliced — a simple L4 HTTP proxy, no preamble/yamux.
+/// first, then the streams are spliced - a simple L4 HTTP proxy, no preamble/yamux.
 async fn proxy_to_dashboard(mut inbound: TcpStream, peeked: Vec<u8>, upstream: &str) {
     let mut up = match TcpStream::connect(upstream).await {
         Ok(s) => s,
@@ -282,19 +295,40 @@ async fn route_and_splice(
 
     let country = state.geo.country(peer.ip());
     // Geo-policy: drop (and log) connections from blocked countries. Under TLS we
-    // cannot send a friendly error, so we simply close — matching the L4 model.
-    if state.is_country_blocked(handle.tunnel_id, country.as_deref()).await {
+    // cannot send a friendly error, so we simply close - matching the L4 model.
+    if state
+        .is_country_blocked(handle.tunnel_id, country.as_deref())
+        .await
+    {
         if mode == RouteMode::Http {
             let _ = inbound
                 .write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 16\r\n\r\nregion is blocked")
                 .await;
         }
-        crate::reporter::report_conn_log(&state, &handle, &peer_ip, country.as_deref(), 0, 0, 0, true).await;
+        crate::reporter::report_conn_log(
+            &state,
+            &handle,
+            &peer_ip,
+            country.as_deref(),
+            0,
+            0,
+            0,
+            true,
+        )
+        .await;
         return;
     }
 
     let (reply_tx, reply_rx) = oneshot::channel();
-    if handle.open_tx.send(OpenStream { route_id: handle.route_id, reply: reply_tx }).await.is_err() {
+    if handle
+        .open_tx
+        .send(OpenStream {
+            route_id: handle.route_id,
+            reply: reply_tx,
+        })
+        .await
+        .is_err()
+    {
         return;
     }
     let stream = match reply_rx.await {
@@ -313,10 +347,19 @@ async fn route_and_splice(
             // copy_bidirectional); count them once here, not twice.
             let bytes_in = to_agent + peeked.len() as u64;
             handle.stats.bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
-            handle.stats.bytes_out.fetch_add(from_agent, Ordering::Relaxed);
+            handle
+                .stats
+                .bytes_out
+                .fetch_add(from_agent, Ordering::Relaxed);
             crate::reporter::report_conn_log(
-                &state, &handle, &peer_ip, country.as_deref(),
-                bytes_in, from_agent, start.elapsed().as_millis(), false,
+                &state,
+                &handle,
+                &peer_ip,
+                country.as_deref(),
+                bytes_in,
+                from_agent,
+                start.elapsed().as_millis(),
+                false,
             )
             .await;
         }
@@ -350,7 +393,11 @@ mod tests {
         body.extend_from_slice(&(ext.len() as u16).to_be_bytes());
         body.extend_from_slice(&ext);
         let mut hs = vec![0x01];
-        hs.extend_from_slice(&[(body.len() >> 16) as u8, (body.len() >> 8) as u8, body.len() as u8]);
+        hs.extend_from_slice(&[
+            (body.len() >> 16) as u8,
+            (body.len() >> 8) as u8,
+            body.len() as u8,
+        ]);
         hs.extend_from_slice(&body);
         let mut rec = vec![0x16, 0x03, 0x01];
         rec.extend_from_slice(&(hs.len() as u16).to_be_bytes());
@@ -380,8 +427,14 @@ mod tests {
 
     #[test]
     fn host_parsing() {
-        assert_eq!(parse_host(b"GET / HTTP/1.1\r\nHost: a.b.com\r\n\r\n").as_deref(), Some("a.b.com"));
-        assert_eq!(parse_host(b"GET / HTTP/1.1\r\nhOsT:  x.y.z:8080  \r\n").as_deref(), Some("x.y.z:8080"));
+        assert_eq!(
+            parse_host(b"GET / HTTP/1.1\r\nHost: a.b.com\r\n\r\n").as_deref(),
+            Some("a.b.com")
+        );
+        assert_eq!(
+            parse_host(b"GET / HTTP/1.1\r\nhOsT:  x.y.z:8080  \r\n").as_deref(),
+            Some("x.y.z:8080")
+        );
         assert_eq!(parse_host(b"GET / HTTP/1.1\r\nUser-Agent: c\r\n\r\n"), None);
     }
 

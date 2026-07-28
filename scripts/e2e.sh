@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# NatForge — full local end-to-end test.
+# NatForge - full local end-to-end test.
 # Brings up Postgres+Redis (docker), both planes, three origin services, and an
 # agent with three routes, then verifies: HTTP-by-subdomain, HTTPS-by-SNI,
 # raw TCP, two users sharing one port, multi-route over one session, and state
@@ -160,7 +160,7 @@ after=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq 
   && ok "HTTP works again after restart" || bad "HTTP after restart"
 
 echo "### 6. tunnel edit: route label, subdomain validation, and live re-route"
-# route label edit — instant, no routing change
+# route label edit - instant, no routing change
 RID=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -r --argjson id "$TID" '.[]|select(.tunnel_id==$id)|.routes[0].route_id')
 curl -s -X PATCH 127.0.0.1:3000/api/tunnels/$TID -H "authorization: Bearer $TOK" -H 'content-type: application/json' \
   -d "{\"route_labels\":[{\"route_id\":$RID,\"label\":\"edited-label\"}]}" >/dev/null

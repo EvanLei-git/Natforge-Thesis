@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NatForge — Service Host</title>
+    <title>NatForge - Service Host</title>
     <link rel="icon" href="../assets/img/natforge_flake.ico">
     <link href="../assets/css/style.css" rel="stylesheet">
 </head>
@@ -26,26 +26,26 @@
 
         <main class="content">
             <h2 class="page-title">Service Host</h2>
-            <p class="page-sub">Expose any local server to the internet through one tunnel — game servers (Minecraft, Terraria, GTA-MTA, …), websites, APIs, SSH, anything that listens on a TCP port. HTTP/HTTPS routes are reached by your subdomain; raw-TCP routes get a dedicated public port.</p>
+            <p class="page-sub">Expose any local server to the internet through one tunnel - game servers (Minecraft, Terraria, GTA-MTA, …), websites, APIs, SSH, anything that listens on a TCP port. HTTP/HTTPS routes are reached by your subdomain; raw-TCP routes get a dedicated public port.</p>
 
             <div class="card" style="border-left:3px solid var(--brand)">
                 <div class="card-body">
                     <h5 style="margin-bottom:8px">Getting started</h5>
                     <ol class="muted small" style="margin:0; padding-left:18px; line-height:1.9">
-                        <li><strong>Request a tunnel</strong> — pick a subdomain (or leave it blank for a random one) and add a route per local port. Choose the route type:
+                        <li><strong>Request a tunnel</strong> - pick a subdomain (or leave it blank for a random one) and add a route per local port. Choose the route type:
                             <span class="badge http">http</span>/<span class="badge https">https</span> for websites/APIs (reached at <code>name.natforge.com</code>),
                             <span class="badge tcp">tcp</span> for game and other raw servers (reached at <code>natforge.com:port</code>).</li>
                         <li><strong>Run the agent</strong> on the machine hosting your server using the printed command (no port-forwarding needed).</li>
-                        <li><strong>Share</strong> the address shown for each route — <code>name.natforge.com</code> for a website, or <code>name.natforge.com:port</code> for a game server. That name points at the NatForge server (not your own IP), which relays to your machine.</li>
+                        <li><strong>Share</strong> the address shown for each route - <code>name.natforge.com</code> for a website, or <code>name.natforge.com:port</code> for a game server. That name points at the NatForge server (not your own IP), which relays to your machine.</li>
                     </ol>
                     <p class="faint small mt" style="margin-bottom:0">Note: routes are TCP. UDP-only games (e.g. Rust, Valheim) aren't supported yet.</p>
                 </div>
             </div>
 
             <div class="stat-grid">
-                <div class="stat"><div class="label">Active tunnels</div><div class="value" id="statTunnels">—</div></div>
-                <div class="stat green"><div class="label">Data in</div><div class="value" id="statIn">—</div></div>
-                <div class="stat amber"><div class="label">Data out</div><div class="value" id="statOut">—</div></div>
+                <div class="stat"><div class="label">Active tunnels</div><div class="value" id="statTunnels">-</div></div>
+                <div class="stat green"><div class="label">Data in</div><div class="value" id="statIn">-</div></div>
+                <div class="stat amber"><div class="label">Data out</div><div class="value" id="statOut">-</div></div>
             </div>
 
             <div class="card">
@@ -84,7 +84,7 @@
         <div class="modal-head"><h5>Request a tunnel</h5><button class="x-btn" data-modal-close><span data-icon="close"></span></button></div>
         <div class="modal-body">
             <div class="field">
-                <label class="lbl">Subdomain <span class="faint small">(optional — leave blank for a random name)</span></label>
+                <label class="lbl">Subdomain <span class="faint small">(optional - leave blank for a random name)</span></label>
                 <div class="row-inline" style="align-items:center">
                     <input type="text" id="reqSubdomain" class="input" placeholder="my-server" pattern="[a-z0-9-]{3,30}" style="flex:1">
                     <span class="faint small">.natforge.com</span>
@@ -154,7 +154,7 @@
                 }
                 const sel = document.getElementById('tunnelSelect');
                 sel.innerHTML = tunnels.length
-                    ? tunnels.map(t => `<option value="${t.tunnel_id}">${escapeHtml(tunnelName(t))} — ${t.status.replace('_',' ')}</option>`).join('')
+                    ? tunnels.map(t => `<option value="${t.tunnel_id}">${escapeHtml(tunnelName(t))} - ${t.status.replace('_',' ')}</option>`).join('')
                     : '<option value="">No tunnels</option>';
                 if (selectedTunnelId !== null) sel.value = String(selectedTunnelId);
 
@@ -219,14 +219,14 @@
                     <pre class="block" style="margin-top:8px">natforge service-host \\\n  ${flags} \\\n  --token &lt;your session token&gt;</pre>
                 </details>
 
-                <label class="lbl mt">Logging — bandwidth</label>
+                <label class="lbl mt">Logging - bandwidth</label>
                 <div class="stat-grid" style="margin:6px 0 0">
                     <div class="stat green"><div class="label">Data in</div><div class="value">${fmtBytes(t.bytes_in)}</div></div>
                     <div class="stat amber"><div class="label">Data out</div><div class="value">${fmtBytes(t.bytes_out)}</div></div>
                     <div class="stat"><div class="label">Total</div><div class="value">${fmtBytes(t.bytes_in + t.bytes_out)}</div></div>
                 </div>
 
-                <label class="lbl mt">Logging — recent connections</label>
+                <label class="lbl mt">Logging - recent connections</label>
                 <div class="card-body flush"><table class="table">
                     <thead><tr><th>When</th><th>Source</th><th>Region</th><th>Route</th><th>In / Out</th><th>Held</th></tr></thead>
                     <tbody id="connRows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
@@ -242,7 +242,7 @@
                 if (!body) return;
                 body.innerHTML = logs.length ? logs.map(l => {
                     const when = new Date(l.created_at).toLocaleString();
-                    const cc = l.country ? `<span class="badge tag">${escapeHtml(l.country)}</span>` : '<span class="faint small">—</span>';
+                    const cc = l.country ? `<span class="badge tag">${escapeHtml(l.country)}</span>` : '<span class="faint small">-</span>';
                     const blocked = l.blocked ? '<span class="badge offline" style="margin-left:6px">blocked</span>' : '';
                     const held = l.duration_ms >= 1000 ? `${(l.duration_ms/1000).toFixed(1)}s` : `${l.duration_ms}ms`;
                     return `<tr>
@@ -263,7 +263,7 @@
             let codes = [];
             try { codes = await API.getTunnelRegionBlocks(t.tunnel_id); } catch (_) {}
             host.innerHTML = `
-                <label class="lbl">Blocking — countries</label>
+                <label class="lbl">Blocking - countries</label>
                 <p class="muted small" style="margin-top:0">Refuse connections from these countries (ISO-3166 alpha-2, comma-separated, e.g. <code>RU, CN</code>). Applies to this tunnel only; the admin may block regions platform-wide too.</p>
                 <div class="row-inline" style="align-items:center">
                     <input type="text" id="blockInput" class="input" style="flex:1" placeholder="RU, CN, KP" value="${escapeHtml(codes.join(', '))}">
@@ -283,7 +283,7 @@
 
         // Stop: drop the live session but KEEP the tunnel (status 'stopped', restartable).
         async function stopTunnel(id) {
-            try { await API.stopTunnel(id); toast('Tunnel stopped (kept — restart by re-running the agent)', 'success'); loadTunnels(); }
+            try { await API.stopTunnel(id); toast('Tunnel stopped (kept - restart by re-running the agent)', 'success'); loadTunnels(); }
             catch (err) { toast(err.message, 'danger'); }
         }
         // Delete: remove the tunnel and free its ports.

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   NatForge UI — design system
+   NatForge UI - design system
    Dark, layered surfaces (Discord-like) + brand teal from the logo (#40b8c0)
    + Azure-style components: Segoe UI, low-radius rectangles, flat fills,
    crisp focus rings. No external CSS framework, no emoji.
@@ -199,7 +199,7 @@ label.lbl { display: block; font-size: 13px; font-weight: 600; color: var(--text
 .row-inline { display: flex; gap: 10px; }
 .row-inline .input { flex: 1; }
 
-/* range slider — accent-color fills the track in supporting browsers; the
+/* range slider - accent-color fills the track in supporting browsers; the
    .nf-range JS gradient fills it everywhere else. */
 input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 3px; background: var(--bg-raised); outline: none; accent-color: var(--brand); }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: var(--brand); border: 2px solid var(--bg-card); cursor: pointer; }

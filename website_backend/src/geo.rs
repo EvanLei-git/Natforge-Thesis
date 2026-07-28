@@ -6,7 +6,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use axum::http::HeaderMap;
-use maxminddb::{geoip2, Reader};
+use maxminddb::{Reader, geoip2};
 use tracing::{info, warn};
 
 #[derive(Clone, Default)]
@@ -23,7 +23,9 @@ impl GeoDb {
         match Reader::open_readfile(path) {
             Ok(r) => {
                 info!("GeoIP database loaded from {path}");
-                GeoDb { reader: Some(Arc::new(r)) }
+                GeoDb {
+                    reader: Some(Arc::new(r)),
+                }
             }
             Err(e) => {
                 warn!("GeoIP database at '{path}' unavailable ({e}); geo-blocking disabled");
@@ -50,17 +52,18 @@ impl GeoDb {
 
 /// Best-effort client IP from proxy headers. None for direct/local connections.
 pub fn client_ip(headers: &HeaderMap) -> Option<IpAddr> {
-    if let Some(v) = headers.get("cf-connecting-ip").and_then(|h| h.to_str().ok()) {
-        if let Ok(ip) = v.trim().parse() {
-            return Some(ip);
-        }
+    if let Some(v) = headers
+        .get("cf-connecting-ip")
+        .and_then(|h| h.to_str().ok())
+        && let Ok(ip) = v.trim().parse()
+    {
+        return Some(ip);
     }
-    if let Some(v) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
-        if let Some(first) = v.split(',').next() {
-            if let Ok(ip) = first.trim().parse() {
-                return Some(ip);
-            }
-        }
+    if let Some(v) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok())
+        && let Some(first) = v.split(',').next()
+        && let Ok(ip) = first.trim().parse()
+    {
+        return Some(ip);
     }
     None
 }

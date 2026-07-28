@@ -1,5 +1,5 @@
 /**
- * NatForge — Frontend API Client
+ * NatForge - Frontend API Client
  *
  * A thin wrapper over the website_backend REST API. Served from the same origin
  * as the backend, so all paths are relative ("/api/..."). Handles JWT storage,

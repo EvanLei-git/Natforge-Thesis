@@ -1,4 +1,4 @@
-//! NatForge — Core Proxy Backend (data plane).
+//! NatForge - Core Proxy Backend (data plane).
 //!
 //! Owns the high-throughput relay: the agent control plane (yamux over TCP), the
 //! shared HTTP :80 and HTTPS :443 subdomain routers, and dedicated TCP ports per
@@ -29,8 +29,12 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
     let config = Config::from_env();
-    if config.jwt_secret == "natforge-dev-secret-change-me" || config.internal_secret == "natforge-internal-dev-secret" {
-        tracing::warn!("SECURITY: using built-in DEV secrets — set JWT_SECRET and INTERNAL_SECRET to strong random values before any non-local deployment (tunnel tokens are forgeable otherwise).");
+    if config.jwt_secret == "natforge-dev-secret-change-me"
+        || config.internal_secret == "natforge-internal-dev-secret"
+    {
+        tracing::warn!(
+            "SECURITY: using built-in DEV secrets - set JWT_SECRET and INTERNAL_SECRET to strong random values before any non-local deployment (tunnel tokens are forgeable otherwise)."
+        );
     }
     info!("NatForge Core Proxy starting (node '{}')", config.node_id);
     info!(
@@ -46,7 +50,10 @@ async fn main() -> anyhow::Result<()> {
     // on the policy tick so a later website restart relearns us.
     for attempt in 1..=30u32 {
         if reporter::node_register(&state).await {
-            info!("registered node '{}' with the control plane", config.node_id);
+            info!(
+                "registered node '{}' with the control plane",
+                config.node_id
+            );
             break;
         }
         if attempt == 1 {

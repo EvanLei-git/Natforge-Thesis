@@ -1,0 +1,21 @@
+# cargo-audit configuration.
+#
+# Each ignored advisory has been triaged as NON-applicable to NatForge's actual
+# usage (see docs/ci.md, "Updating the audit ignore-list"). Every other advisory in
+# the tree was resolved by `cargo update`; do not add an ignore for a real, fixable,
+# applicable advisory.
+
+[advisories]
+ignore = [
+    # rsa is pulled transitively by `jsonwebtoken` for the RS* JWT algorithms.
+    # NatForge signs and verifies every JWT with HS256 (HMAC + shared secret), so
+    # the RSA decryption path - where the Marvin timing sidechannel lives - is
+    # never exercised.
+    "RUSTSEC-2023-0071",
+
+    # The maxminddb advisory concerns `Reader::open_mmap`. NatForge loads the
+    # GeoLite2 database with `Reader::open_readfile` (in-memory) in both
+    # core_proxy_backend/src/geo.rs and website_backend/src/geo.rs, and never calls
+    # the unsound mmap API, so the unsoundness is not reachable.
+    "RUSTSEC-2025-0132",
+]

@@ -3,7 +3,7 @@
 //! For raw-TCP routes (e.g. a Minecraft server) the core provisions a per-tunnel
 //! SRV record `_minecraft._tcp.<subdomain>` so players can enter just
 //! `<subdomain>.<domain>` instead of `host:port`. HTTP/HTTPS routes need no
-//! per-tunnel record — the wildcard `*.<domain>` A record (set up once, see thesis
+//! per-tunnel record - the wildcard `*.<domain>` A record (set up once, see thesis
 //! Appendix D) already resolves them, and the core routes by Host/SNI.
 //!
 //! These call the Cloudflare v4 API for real when `CF_API_TOKEN` is a live token.
@@ -25,7 +25,10 @@ pub struct CloudflareManager {
 
 impl CloudflareManager {
     pub fn from_config(cfg: &Config) -> Self {
-        Self { api_token: cfg.cf_api_token.clone(), zone_id: cfg.cf_zone_id.clone() }
+        Self {
+            api_token: cfg.cf_api_token.clone(),
+            zone_id: cfg.cf_zone_id.clone(),
+        }
     }
 
     fn is_mock(&self) -> bool {
@@ -47,10 +50,16 @@ impl CloudflareManager {
     ) -> Result<(), String> {
         let fqdn = format!("{subdomain}.{domain}");
         if self.is_mock() {
-            info!("(Cloudflare mock) zone {}: SRV {SERVICE}.{PROTO}.{fqdn} -> {fqdn}:{port}", self.zone_id);
+            info!(
+                "(Cloudflare mock) zone {}: SRV {SERVICE}.{PROTO}.{fqdn} -> {fqdn}:{port}",
+                self.zone_id
+            );
             return Ok(());
         }
-        let url = format!("https://api.cloudflare.com/client/v4/zones/{}/dns_records", self.zone_id);
+        let url = format!(
+            "https://api.cloudflare.com/client/v4/zones/{}/dns_records",
+            self.zone_id
+        );
         let body = json!({
             "type": "SRV",
             "ttl": 1, // 1 = automatic
@@ -69,7 +78,12 @@ impl CloudflareManager {
     }
 
     /// Remove a tunnel's SRV record(s) on teardown (best-effort): find by name, delete.
-    pub async fn remove_srv(&self, http: &reqwest::Client, subdomain: &str, domain: &str) -> Result<(), String> {
+    pub async fn remove_srv(
+        &self,
+        http: &reqwest::Client,
+        subdomain: &str,
+        domain: &str,
+    ) -> Result<(), String> {
         let name = Self::srv_name(subdomain, domain);
         if self.is_mock() {
             info!("(Cloudflare mock) zone {}: delete SRV {name}", self.zone_id);
@@ -83,7 +97,10 @@ impl CloudflareManager {
         if let Some(records) = v["result"].as_array() {
             for rec in records {
                 if let Some(id) = rec["id"].as_str() {
-                    let del = format!("https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}", self.zone_id, id);
+                    let del = format!(
+                        "https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}",
+                        self.zone_id, id
+                    );
                     if let Err(e) = self.send(http.delete(&del)).await {
                         warn!("cloudflare SRV delete {id} failed: {e}");
                     }
@@ -95,7 +112,13 @@ impl CloudflareManager {
 
     /// Attach the bearer token, send, and parse the JSON envelope.
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<serde_json::Value, String> {
-        let resp = req.bearer_auth(&self.api_token).send().await.map_err(|e| e.to_string())?;
-        resp.json::<serde_json::Value>().await.map_err(|e| e.to_string())
+        let resp = req
+            .bearer_auth(&self.api_token)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        resp.json::<serde_json::Value>()
+            .await
+            .map_err(|e| e.to_string())
     }
 }

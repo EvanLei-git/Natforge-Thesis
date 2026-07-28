@@ -41,13 +41,20 @@ impl Config {
             database_url: env::var("DATABASE_URL").unwrap_or_else(|_| {
                 "postgres://natforge:natforge@127.0.0.1:5432/natforge".to_string()
             }),
-            redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+            redis_url: env::var("REDIS_URL")
+                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
             geoip_db: env::var("GEOIP_DB").unwrap_or_default(),
-            admin_email: env::var("ADMIN_EMAIL").unwrap_or_default().trim().to_lowercase(),
+            admin_email: env::var("ADMIN_EMAIL")
+                .unwrap_or_default()
+                .trim()
+                .to_lowercase(),
         }
     }
 }
 
 fn env_u16(key: &str, default: u16) -> u16 {
-    env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }

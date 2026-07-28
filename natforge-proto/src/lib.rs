@@ -90,7 +90,7 @@ pub enum CoreReply {
 
 // ---------------------------------------------------------------------------
 // Signed tunnel-token claims (HS256). Minted by the control plane, verified by
-// the data plane — both use these exact structs, so they cannot disagree.
+// the data plane - both use these exact structs, so they cannot disagree.
 // ---------------------------------------------------------------------------
 
 /// One authorized route inside the tunnel token.
@@ -141,12 +141,18 @@ impl TunnelClaims {
             match r.mode {
                 RouteMode::Http | RouteMode::Https => {
                     if r.host.is_none() || r.public_port.is_some() {
-                        return Err(format!("route {} (http/https) must carry host and no port", r.route_id));
+                        return Err(format!(
+                            "route {} (http/https) must carry host and no port",
+                            r.route_id
+                        ));
                     }
                 }
                 RouteMode::Tcp => {
                     if r.public_port.is_none() || r.host.is_some() {
-                        return Err(format!("route {} (tcp) must carry port and no host", r.route_id));
+                        return Err(format!(
+                            "route {} (tcp) must carry port and no host",
+                            r.route_id
+                        ));
                     }
                 }
             }
@@ -210,7 +216,11 @@ pub async fn read_preamble<R: AsyncRead + Unpin>(
     let mut hdr = [0u8; 7];
     r.read_exact(&mut hdr).await?;
     anyhow::ensure!(&hdr[0..4] == STREAM_MAGIC, "bad stream magic");
-    anyhow::ensure!(hdr[4] == STREAM_VERSION, "unsupported stream version {}", hdr[4]);
+    anyhow::ensure!(
+        hdr[4] == STREAM_VERSION,
+        "unsupported stream version {}",
+        hdr[4]
+    );
     let route_id = u16::from_be_bytes([hdr[5], hdr[6]]);
 
     let mut kind = [0u8; 1];
@@ -237,7 +247,10 @@ pub async fn read_preamble<R: AsyncRead + Unpin>(
     r.read_exact(&mut rl).await?;
     let replay_len = u16::from_be_bytes(rl) as usize;
     // Bounded by u16 on the wire; assert the explicit cap defensively before allocating.
-    anyhow::ensure!(replay_len <= MAX_REPLAY, "replay_len {replay_len} exceeds cap");
+    anyhow::ensure!(
+        replay_len <= MAX_REPLAY,
+        "replay_len {replay_len} exceeds cap"
+    );
     let mut replay = vec![0u8; replay_len];
     if replay_len > 0 {
         r.read_exact(&mut replay).await?;
@@ -262,8 +275,16 @@ mod tests {
 
     #[tokio::test]
     async fn preamble_ipv4_with_replay() {
-        let peer = Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5)), 51234));
-        roundtrip(7, peer, b"GET / HTTP/1.1\r\nHost: duck-a1b2.natforge.com\r\n\r\n").await;
+        let peer = Some(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 5)),
+            51234,
+        ));
+        roundtrip(
+            7,
+            peer,
+            b"GET / HTTP/1.1\r\nHost: duck-a1b2.natforge.com\r\n\r\n",
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -286,18 +307,41 @@ mod tests {
     #[test]
     fn claims_shape_validation() {
         let ok = TunnelClaims {
-            v: 1, sub: 1, tunnel_id: 1, subdomain: "x".into(), purpose: "tunnel".into(),
+            v: 1,
+            sub: 1,
+            tunnel_id: 1,
+            subdomain: "x".into(),
+            purpose: "tunnel".into(),
             routes: vec![
-                RouteClaim { route_id: 1, mode: RouteMode::Http, host: Some("x.n.com".into()), public_port: None },
-                RouteClaim { route_id: 2, mode: RouteMode::Tcp, host: None, public_port: Some(20001) },
+                RouteClaim {
+                    route_id: 1,
+                    mode: RouteMode::Http,
+                    host: Some("x.n.com".into()),
+                    public_port: None,
+                },
+                RouteClaim {
+                    route_id: 2,
+                    mode: RouteMode::Tcp,
+                    host: None,
+                    public_port: Some(20001),
+                },
             ],
             exp: 9999999999,
         };
         assert!(ok.validate_shape().is_ok());
 
         let bad = TunnelClaims {
-            v: 1, sub: 1, tunnel_id: 1, subdomain: "x".into(), purpose: "tunnel".into(),
-            routes: vec![RouteClaim { route_id: 1, mode: RouteMode::Tcp, host: Some("x".into()), public_port: None }],
+            v: 1,
+            sub: 1,
+            tunnel_id: 1,
+            subdomain: "x".into(),
+            purpose: "tunnel".into(),
+            routes: vec![RouteClaim {
+                route_id: 1,
+                mode: RouteMode::Tcp,
+                host: Some("x".into()),
+                public_port: None,
+            }],
             exp: 9999999999,
         };
         assert!(bad.validate_shape().is_err());

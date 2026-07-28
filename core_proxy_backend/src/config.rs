@@ -41,7 +41,7 @@ pub struct Config {
     pub max_header_bytes: usize,
     /// Path to a MaxMind GeoLite2-Country.mmdb (empty = geo-blocking disabled).
     pub geoip_db: String,
-    /// Where the bare apex / www host on :80 is forwarded — the control-plane
+    /// Where the bare apex / www host on :80 is forwarded - the control-plane
     /// dashboard (`website_backend`). Subdomains remain tunnel routes.
     pub dashboard_addr: String,
     pub cf_api_token: String,
@@ -60,7 +60,9 @@ impl Config {
             https_port: env_u16("HTTPS_PORT", 8443),
             node_id: env::var("NODE_ID").unwrap_or_else(|_| "edge-1".to_string()),
             node_name: env::var("NODE_NAME").unwrap_or_else(|_| "Local".to_string()),
-            node_region: env::var("NODE_REGION").ok().filter(|s| !s.trim().is_empty()),
+            node_region: env::var("NODE_REGION")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
             control_endpoint: env::var("CONTROL_ENDPOINT")
                 .unwrap_or_else(|_| format!("{public_host}:{control_port}")),
             internal_url: env::var("INTERNAL_URL")
@@ -70,7 +72,8 @@ impl Config {
             public_host,
             website_url: env::var("WEBSITE_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:3000".to_string()),
-            redis_url: env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+            redis_url: env::var("REDIS_URL")
+                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
             jwt_secret: env::var("JWT_SECRET")
                 .unwrap_or_else(|_| "natforge-dev-secret-change-me".to_string()),
             internal_secret: env::var("INTERNAL_SECRET")
@@ -80,7 +83,8 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(16384),
             geoip_db: env::var("GEOIP_DB").unwrap_or_default(),
-            dashboard_addr: env::var("DASHBOARD_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string()),
+            dashboard_addr: env::var("DASHBOARD_ADDR")
+                .unwrap_or_else(|_| "127.0.0.1:3000".to_string()),
             cf_api_token: env::var("CF_API_TOKEN").unwrap_or_else(|_| "mock_token".to_string()),
             cf_zone_id: env::var("CF_ZONE_ID").unwrap_or_else(|_| "mock_zone".to_string()),
         }
@@ -88,5 +92,8 @@ impl Config {
 }
 
 fn env_u16(key: &str, default: u16) -> u16 {
-    env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
 }

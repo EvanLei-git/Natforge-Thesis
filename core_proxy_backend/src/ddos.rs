@@ -1,10 +1,10 @@
 //! Userspace connection-rate abuse guard.
 //!
-//! This is an honest *userspace* heuristic — not a kernel eBPF/XDP drop path. A
+//! This is an honest *userspace* heuristic - not a kernel eBPF/XDP drop path. A
 //! per-IP connection-rate counter over a sliding one-second window blackholes a
 //! source exceeding `MAX_CONN_PER_SEC` for `BLACKLIST_TTL`, shedding load before it
 //! reaches the multiplexer. The blacklist is **time-bounded** (entries expire) so a
-//! transient flood — or a spoofed source address — cannot permanently ban an
+//! transient flood - or a spoofed source address - cannot permanently ban an
 //! innocent IP or grow memory without limit. (A production deployment could push an
 //! equivalent rule into the kernel via eBPF/XDP; that is noted as future work and
 //! not claimed here.)
@@ -45,16 +45,25 @@ impl DdosProtector {
         }
 
         let mut windows = self.windows.lock().await;
-        let w = windows.entry(source_ip.to_string()).or_insert(Window { started: now, count: 0 });
+        let w = windows.entry(source_ip.to_string()).or_insert(Window {
+            started: now,
+            count: 0,
+        });
         if now.duration_since(w.started) > WINDOW {
             w.started = now;
             w.count = 0;
         }
         w.count += 1;
         if w.count > MAX_CONN_PER_SEC {
-            warn!("connection-rate guard tripped: {source_ip} exceeded {MAX_CONN_PER_SEC} conn/s — blackholing in userspace (expires in {}s)", BLACKLIST_TTL.as_secs());
+            warn!(
+                "connection-rate guard tripped: {source_ip} exceeded {MAX_CONN_PER_SEC} conn/s - blackholing in userspace (expires in {}s)",
+                BLACKLIST_TTL.as_secs()
+            );
             drop(windows);
-            self.blacklist.lock().await.insert(source_ip.to_string(), now);
+            self.blacklist
+                .lock()
+                .await
+                .insert(source_ip.to_string(), now);
             return false;
         }
         true

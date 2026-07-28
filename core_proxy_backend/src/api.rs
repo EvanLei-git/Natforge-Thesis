@@ -2,14 +2,14 @@
 //! plane (never by end users). Guarded by the shared internal secret: observe live
 //! tunnels and force one down when a user clicks "Stop".
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
-    Json, Router,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -19,7 +19,10 @@ use crate::state::CoreState;
 const INTERNAL_HEADER: &str = "x-internal-secret";
 
 fn check_secret(state: &Arc<CoreState>, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
-    let provided = headers.get(INTERNAL_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let provided = headers
+        .get(INTERNAL_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if provided == state.config.internal_secret {
         Ok(())
     } else {
@@ -87,9 +90,13 @@ async fn stop_tunnel(
     match info {
         Some((tunnel_id, ports)) => {
             crate::tunnel::teardown(&state, tunnel_id, &subdomain, &ports).await;
-            Ok(Json(json!({ "status": "stopping", "subdomain": subdomain })))
+            Ok(Json(
+                json!({ "status": "stopping", "subdomain": subdomain }),
+            ))
         }
-        None => Ok(Json(json!({ "status": "not_found", "subdomain": subdomain }))),
+        None => Ok(Json(
+            json!({ "status": "not_found", "subdomain": subdomain }),
+        )),
     }
 }
 

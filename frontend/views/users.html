@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NatForge — Users</title>
+    <title>NatForge - Users</title>
     <link rel="icon" href="../assets/img/natforge_flake.ico">
     <link href="../assets/css/style.css" rel="stylesheet">
 </head>
@@ -90,7 +90,7 @@
                 return `<div class="flex between" style="padding:8px 0; border-bottom:1px solid var(--border); gap:12px; flex-wrap:wrap">
                     <div><span class="host">${title}</span>
                          <span class="badge ${t.status}" style="margin-left:8px">${t.status.replace('_',' ')}</span>
-                         <div class="faint small">${escapeHtml(t.full_host)} &middot; agent ${t.agent_ip || '—'} &middot; ${routeBadges(t)}</div></div>
+                         <div class="faint small">${escapeHtml(t.full_host)} &middot; agent ${t.agent_ip || '-'} &middot; ${routeBadges(t)}</div></div>
                     <div class="row-inline" style="gap:6px; align-items:center">
                         <span class="faint small">${nfIcon('download')} ${fmtBytes(t.bytes_in)} ${nfIcon('upload')} ${fmtBytes(t.bytes_out)}</span>
                         <button class="btn btn-secondary btn-sm" title="Edit tunnel" onclick='editTunnel(${t.tunnel_id})'>${nfIcon('edit')}</button>

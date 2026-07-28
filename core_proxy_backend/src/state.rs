@@ -8,13 +8,14 @@
 //!   * `http_routes`  : subdomain  -> handle  (shared :80 Host routing)
 //!   * `https_routes` : subdomain  -> handle  (shared :443 SNI routing)
 //!   * `port_routes`  : public TCP port -> handle (dedicated raw-TCP ports)
+//!
 //! Plus `tunnels` (subdomain -> ActiveTunnel) for lifecycle/teardown.
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, mpsc, oneshot};
 use yamux::{ConnectionError, Stream};
 
 use tokio_rustls::TlsAcceptor;
@@ -62,7 +63,7 @@ pub struct ActiveTunnel {
     pub stats: Arc<TunnelStats>,
     /// Public listener tasks (tcp routes) to abort on teardown.
     pub listener_handles: Vec<tokio::task::JoinHandle<()>>,
-    /// Aborts the yamux driver — used to force a tunnel down from the API.
+    /// Aborts the yamux driver - used to force a tunnel down from the API.
     pub driver_abort: tokio::task::AbortHandle,
 }
 
@@ -123,7 +124,7 @@ impl CoreState {
 
     /// Whether a connection from `country` to `tunnel_id` should be refused, by
     /// either the platform-wide block list or this tunnel's own block list. An
-    /// unknown country (no GeoIP data) is always allowed — we never block blindly.
+    /// unknown country (no GeoIP data) is always allowed - we never block blindly.
     pub async fn is_country_blocked(&self, tunnel_id: i64, country: Option<&str>) -> bool {
         let Some(cc) = country else { return false };
         if self.blocked_regions.read().await.iter().any(|c| c == cc) {

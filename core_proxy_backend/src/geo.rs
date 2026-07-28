@@ -7,7 +7,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use maxminddb::{geoip2, Reader};
+use maxminddb::{Reader, geoip2};
 use tracing::{info, warn};
 
 #[derive(Clone, Default)]
@@ -26,7 +26,9 @@ impl GeoDb {
         match Reader::open_readfile(path) {
             Ok(r) => {
                 info!("GeoIP database loaded from {path}");
-                GeoDb { reader: Some(Arc::new(r)) }
+                GeoDb {
+                    reader: Some(Arc::new(r)),
+                }
             }
             Err(e) => {
                 warn!("GeoIP database at '{path}' unavailable ({e}); geo-blocking disabled");

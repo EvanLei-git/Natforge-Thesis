@@ -4,9 +4,9 @@
 //! in `natforge_proto::TunnelClaims`) authorize the data-plane handshake.
 
 use axum::extract::FromRequestParts;
-use axum::http::request::Parts;
 use axum::http::StatusCode;
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use axum::http::request::Parts;
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
 use natforge_proto::{RouteClaim, TunnelClaims};
@@ -33,8 +33,12 @@ pub fn issue_session(secret: &str, user_id: i32, email: &str, role: &str) -> Str
         role: role.to_string(),
         exp: (now() + SESSION_TTL_SECS) as usize,
     };
-    encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret.as_bytes()))
-        .expect("jwt encode")
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .expect("jwt encode")
 }
 
 pub fn issue_tunnel_token(
@@ -53,15 +57,23 @@ pub fn issue_tunnel_token(
         routes,
         exp: (now() + TUNNEL_TTL_SECS) as usize,
     };
-    encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(secret.as_bytes()))
-        .expect("jwt encode")
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .expect("jwt encode")
 }
 
 pub fn verify_session(secret: &str, token: &str) -> Result<SessionClaims, String> {
     let validation = Validation::new(Algorithm::HS256);
-    decode::<SessionClaims>(token, &DecodingKey::from_secret(secret.as_bytes()), &validation)
-        .map(|d| d.claims)
-        .map_err(|e| e.to_string())
+    decode::<SessionClaims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    )
+    .map(|d| d.claims)
+    .map_err(|e| e.to_string())
 }
 
 /// Authenticated user, extracted from the `Authorization: Bearer` header.
@@ -89,6 +101,10 @@ impl FromRequestParts<crate::db::connection::SharedState> for AuthUser {
             .ok_or((StatusCode::UNAUTHORIZED, "malformed authorization header"))?;
         let claims = verify_session(&state.config.jwt_secret, token)
             .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid or expired token"))?;
-        Ok(AuthUser { user_id: claims.sub, email: claims.email, role: claims.role })
+        Ok(AuthUser {
+            user_id: claims.sub,
+            email: claims.email,
+            role: claims.role,
+        })
     }
 }

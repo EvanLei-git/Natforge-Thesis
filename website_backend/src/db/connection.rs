@@ -9,10 +9,10 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
-use sqlx::postgres::PgPoolOptions;
+use redis::aio::ConnectionManager;
 use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 
 use crate::config::Config;
 
@@ -39,7 +39,7 @@ impl AppState {
             .await
             .with_context(|| {
                 format!(
-                    "failed to connect to PostgreSQL at {} — is `docker compose up -d` running?",
+                    "failed to connect to PostgreSQL at {} - is `docker compose up -d` running?",
                     config.database_url
                 )
             })?;
@@ -49,13 +49,13 @@ impl AppState {
             .await
             .context("failed to run database migrations")?;
 
-        let redis_client = redis::Client::open(config.redis_url.clone())
-            .context("invalid REDIS_URL")?;
+        let redis_client =
+            redis::Client::open(config.redis_url.clone()).context("invalid REDIS_URL")?;
         let redis = ConnectionManager::new(redis_client)
             .await
             .with_context(|| {
                 format!(
-                    "failed to connect to Redis at {} — is `docker compose up -d` running?",
+                    "failed to connect to Redis at {} - is `docker compose up -d` running?",
                     config.redis_url
                 )
             })?;
@@ -91,7 +91,11 @@ pub struct DeviceRecord {
 }
 
 /// Store a fresh device/user code pair (both expire together after the TTL).
-pub async fn devcode_create(redis: &ConnectionManager, user_code: &str, device_code: &str) -> anyhow::Result<()> {
+pub async fn devcode_create(
+    redis: &ConnectionManager,
+    user_code: &str,
+    device_code: &str,
+) -> anyhow::Result<()> {
     let mut conn = redis.clone();
     let uk = devcode_user_key(user_code);
     let _: () = conn
@@ -99,13 +103,23 @@ pub async fn devcode_create(redis: &ConnectionManager, user_code: &str, device_c
         .await
         .context("redis devcode hset")?;
     let _: () = conn.expire(&uk, DEVCODE_TTL_SECS).await?;
-    let _: () = conn.set_ex(devcode_index_key(device_code), user_code, DEVCODE_TTL_SECS as u64).await?;
+    let _: () = conn
+        .set_ex(
+            devcode_index_key(device_code),
+            user_code,
+            DEVCODE_TTL_SECS as u64,
+        )
+        .await?;
     Ok(())
 }
 
 /// Mark a user code approved by `uid`. Returns false if the code does not exist
 /// (expired or never issued).
-pub async fn devcode_approve(redis: &ConnectionManager, user_code: &str, uid: i32) -> anyhow::Result<bool> {
+pub async fn devcode_approve(
+    redis: &ConnectionManager,
+    user_code: &str,
+    uid: i32,
+) -> anyhow::Result<bool> {
     let mut conn = redis.clone();
     let uk = devcode_user_key(user_code);
     let exists: bool = conn.exists(&uk).await?;
@@ -117,22 +131,33 @@ pub async fn devcode_approve(redis: &ConnectionManager, user_code: &str, uid: i3
 }
 
 /// Resolve a device code to its approval state. `None` => unknown/expired.
-pub async fn devcode_status(redis: &ConnectionManager, device_code: &str) -> anyhow::Result<Option<DeviceRecord>> {
+pub async fn devcode_status(
+    redis: &ConnectionManager,
+    device_code: &str,
+) -> anyhow::Result<Option<DeviceRecord>> {
     let mut conn = redis.clone();
     let user_code: Option<String> = conn.get(devcode_index_key(device_code)).await?;
     let Some(user_code) = user_code else {
         return Ok(None);
     };
     let uk = devcode_user_key(&user_code);
-    let fields: Option<(String, String)> = conn.hget(&uk, &["device_code", "approved_user"]).await?;
+    let fields: Option<(String, String)> =
+        conn.hget(&uk, &["device_code", "approved_user"]).await?;
     let Some((stored_device, approved)) = fields else {
         return Ok(None);
     };
     if stored_device != device_code {
         return Ok(None);
     }
-    let approved_user = if approved.is_empty() { None } else { approved.parse::<i32>().ok() };
-    Ok(Some(DeviceRecord { device_code: stored_device, approved_user }))
+    let approved_user = if approved.is_empty() {
+        None
+    } else {
+        approved.parse::<i32>().ok()
+    };
+    Ok(Some(DeviceRecord {
+        device_code: stored_device,
+        approved_user,
+    }))
 }
 
 /// Consume a device code once its session token has been issued, making it

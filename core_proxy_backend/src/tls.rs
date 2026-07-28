@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::ServerConfig;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
 use tokio_rustls::TlsAcceptor;
 
@@ -38,7 +38,10 @@ pub fn generate() -> anyhow::Result<ControlTls> {
         .context("install self-signed cert")?;
     config.alpn_protocols = vec![b"natforge/1".to_vec()];
 
-    Ok(ControlTls { acceptor: TlsAcceptor::from(Arc::new(config)), fingerprint })
+    Ok(ControlTls {
+        acceptor: TlsAcceptor::from(Arc::new(config)),
+        fingerprint,
+    })
 }
 
 /// Lowercase-hex SHA-256 of a certificate's DER encoding.

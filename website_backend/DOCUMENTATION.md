@@ -1,4 +1,4 @@
-# Website Backend (Control Plane) — Documentation
+# Website Backend (Control Plane), Documentation
 
 `website_backend` is the NatForge **control plane**: an Axum HTTP service (`:3000`) backed by **PostgreSQL** (durable) and **Redis** (ephemeral). It owns identity, the multi-route tunnel reservation + region registry, per-tunnel observability, geo-blocking policy, admin policy, the internal API the nodes report to, and serving of the static dashboard. It is *not* in the data path.
 
@@ -17,8 +17,8 @@
 ## Module layout
 ```
 src/{config,jwt,geo,models,main}.rs
-src/db/{connection,queries}.rs   # connection.rs also holds the RFC 8628 device codes
-src/models.rs                    # FromRow rows + API view structs
+src/db/{connection,queries}.rs # connection.rs also holds the RFC 8628 device codes
+src/models.rs # FromRow rows + API view structs
 src/handlers/{auth,tunnels,admin,internal}.rs
 src/routes/mod.rs
 migrations/0001..0007_*.sql
@@ -40,7 +40,7 @@ migrations/0001..0007_*.sql
 | GET | `/api/admin/stats` \| `/admin/tunnels` \| `/admin/users` | admin | Network overview, all tunnels, per-user overview |
 | GET | `/api/admin/nodes` ; PATCH/DELETE `/api/admin/nodes/{id}` | admin | List / rename-enable / remove regions |
 
-## Internal API (nodes only — `x-internal-secret`)
+## Internal API (nodes only, `x-internal-secret`)
 `POST /api/internal/node_register {…}` · `tunnel_up {tunnel_id,node_id,agent_ip?}` · `tunnel_down {tunnel_id}` · `bandwidth {…}` · `conn_log {…}` · `GET /api/internal/policy` (blocked ports + regions + per-tunnel blocks).
 
 ## Config

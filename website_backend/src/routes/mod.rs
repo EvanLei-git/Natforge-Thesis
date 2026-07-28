@@ -2,8 +2,8 @@
 //! (see `frontend/DOCUMENTATION.md`) onto its handler. Path params use axum 0.8
 //! `{name}` syntax.
 
-use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
+use axum::routing::{delete, get, patch, post, put};
 
 use crate::db::connection::SharedState;
 use crate::handlers::{admin, auth, internal, tunnels, user};
@@ -24,7 +24,10 @@ pub fn api_router(state: SharedState) -> Router {
             delete(tunnels::delete_tunnel).patch(tunnels::edit_tunnel),
         )
         .route("/api/tunnels/{tunnel_id}/stop", post(tunnels::stop_tunnel))
-        .route("/api/tunnels/{tunnel_id}/bandwidth", get(tunnels::tunnel_bandwidth))
+        .route(
+            "/api/tunnels/{tunnel_id}/bandwidth",
+            get(tunnels::tunnel_bandwidth),
+        )
         .route("/api/tunnels/{tunnel_id}/logs", get(tunnels::tunnel_logs))
         .route(
             "/api/tunnels/{tunnel_id}/region_blocks",
@@ -32,7 +35,10 @@ pub fn api_router(state: SharedState) -> Router {
         )
         .route("/api/regions", get(tunnels::list_regions))
         // --- User self-service ---
-        .route("/api/user/profile", get(user::get_profile).put(user::update_profile))
+        .route(
+            "/api/user/profile",
+            get(user::get_profile).put(user::update_profile),
+        )
         .route("/api/user/password", put(user::change_password))
         // --- Admin ---
         .route(
@@ -47,7 +53,10 @@ pub fn api_router(state: SharedState) -> Router {
             "/api/admin/port_blocks",
             get(admin::get_port_blocks).post(admin::add_port_block),
         )
-        .route("/api/admin/port_blocks/{port}", delete(admin::remove_port_block))
+        .route(
+            "/api/admin/port_blocks/{port}",
+            delete(admin::remove_port_block),
+        )
         .route("/api/admin/stats", get(admin::network_stats))
         .route("/api/admin/tunnels", get(admin::all_tunnels))
         .route("/api/admin/users", get(admin::list_users))
