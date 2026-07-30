@@ -10,6 +10,7 @@ pub mod db;
 pub mod geo;
 pub mod handlers;
 pub mod jwt;
+pub mod metrics;
 pub mod models;
 pub mod routes;
 
@@ -64,6 +65,26 @@ async fn main() -> anyhow::Result<()> {
                     Ok(_) => {}
                     Err(e) => tracing::warn!("reconciliation error: {e}"),
                 }
+            }
+        });
+    }
+
+    // Prometheus metrics on a localhost-only port, scraped by Prometheus (see monitoring/).
+    {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let metrics_app = Router::new()
+                .route("/metrics", get(crate::metrics::metrics_handler))
+                .with_state(st);
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 9101));
+            match tokio::net::TcpListener::bind(addr).await {
+                Ok(listener) => {
+                    tracing::info!("metrics endpoint on http://{addr}/metrics");
+                    if let Err(e) = serve(listener, metrics_app).await {
+                        tracing::warn!("metrics server error: {e}");
+                    }
+                }
+                Err(e) => tracing::warn!("failed to bind metrics endpoint on {addr}: {e}"),
             }
         });
     }

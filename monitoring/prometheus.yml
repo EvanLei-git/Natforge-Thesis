@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Host metrics: CPU, memory, disk, network (node_exporter).
+  - job_name: node
+    static_configs:
+      - targets: ['127.0.0.1:9100']
+
+  # NatForge application metrics: signins, active tunnels, TCP port-pool usage.
+  # Enabled in phase 2 once the control plane exposes /metrics on 127.0.0.1:9101.
+  # Prometheus tolerates the target being down until then.
+  - job_name: natforge
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['127.0.0.1:9101']

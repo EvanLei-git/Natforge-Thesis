@@ -1,0 +1,8 @@
+# Reproducible static-musl agent builds. `cross` runs the build in a container that
+# already has the musl C toolchain (x86_64-linux-musl-gcc); we add cmake + perl for
+# aws-lc-sys. The timezone is preset before apt-get so tzdata never prompts (which
+# would otherwise hang the non-interactive build at "Geographic area:").
+[target.x86_64-unknown-linux-musl]
+pre-build = [
+    "ln -snf /usr/share/zoneinfo/Etc/UTC /etc/localtime && echo Etc/UTC > /etc/timezone && export DEBIAN_FRONTEND=noninteractive && apt-get update && apt-get install -y --no-install-recommends cmake perl",
+]

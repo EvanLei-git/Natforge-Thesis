@@ -84,6 +84,9 @@ pub struct CoreState {
     pub geo: GeoDb,
     /// TLS acceptor for the agent control connection (self-signed, boot-generated).
     pub tls: TlsAcceptor,
+    /// Optional wildcard TLS acceptor for terminating public HTTPS on http-mode
+    /// user subdomains. `None` = feature disabled. Hot-swapped on cert renewal.
+    pub wildcard_tls: RwLock<Option<TlsAcceptor>>,
     /// SHA-256 fingerprint of our control certificate (agents pin this).
     pub control_cert_fp: String,
     pub http: reqwest::Client,
@@ -95,6 +98,7 @@ impl CoreState {
         let redis = redis::aio::ConnectionManager::new(client).await?;
         let geo = GeoDb::open(&config.geoip_db);
         let control = crate::tls::generate()?;
+        let wildcard_tls = RwLock::new(load_wildcard_from_config(&config));
         Ok(Arc::new(CoreState {
             config,
             tunnels: RwLock::new(HashMap::new()),
@@ -108,6 +112,7 @@ impl CoreState {
             tunnel_region_blocks: RwLock::new(HashMap::new()),
             geo,
             tls: control.acceptor,
+            wildcard_tls,
             control_cert_fp: control.fingerprint,
             http: reqwest::Client::new(),
         }))
@@ -120,6 +125,16 @@ impl CoreState {
             RouteMode::Https => self.https_routes.read().await.get(subdomain).cloned(),
             RouteMode::Tcp => None,
         }
+    }
+
+    /// The wildcard TLS acceptor, if a certificate is configured and loaded.
+    pub async fn wildcard_acceptor(&self) -> Option<TlsAcceptor> {
+        self.wildcard_tls.read().await.clone()
+    }
+
+    /// Replace the wildcard TLS acceptor (used by the certificate hot-reload task).
+    pub async fn set_wildcard_acceptor(&self, acceptor: Option<TlsAcceptor>) {
+        *self.wildcard_tls.write().await = acceptor;
     }
 
     /// Whether a connection from `country` to `tunnel_id` should be refused, by
@@ -135,5 +150,23 @@ impl CoreState {
             .await
             .get(&tunnel_id)
             .is_some_and(|list| list.iter().any(|c| c == cc))
+    }
+}
+
+/// Load the wildcard TLS acceptor from the configured cert/key paths, if both are
+/// set. Any error (missing or broken file) logs a warning and disables the feature.
+fn load_wildcard_from_config(config: &Config) -> Option<TlsAcceptor> {
+    match (&config.wildcard_cert_path, &config.wildcard_key_path) {
+        (Some(cert), Some(key)) => match crate::tls::load_wildcard_acceptor(cert, key) {
+            Ok(acceptor) => {
+                tracing::info!("wildcard TLS enabled (terminating https for http routes)");
+                Some(acceptor)
+            }
+            Err(e) => {
+                tracing::warn!("wildcard TLS disabled: {e}");
+                None
+            }
+        },
+        _ => None,
     }
 }

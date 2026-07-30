@@ -1,0 +1,43 @@
+# Full production stack: datastores (included from docker-compose.yml) plus the
+# website and core as containers. This is what the VM runs under CD.
+#
+#   On the VM:  NATFORGE_TAG=<sha|latest> docker compose -f docker-compose.deploy.yml up -d
+#
+# Images are pulled from ghcr.io; secrets stay on the VM in /etc/natforge/*.env and
+# are never baked into the image or committed. Both apps use host networking so the
+# core can bind :80/:443/:4000/:3001 + the 20000-20100 TCP pool and the existing
+# 127.0.0.1-based config (DATABASE_URL, REDIS_URL, DASHBOARD_ADDR) works unchanged.
+include:
+  - docker-compose.yml
+
+services:
+  website:
+    image: ghcr.io/evanlei-git/natforge-website:${NATFORGE_TAG:-latest}
+    pull_policy: always
+    network_mode: host
+    env_file:
+      - path: /etc/natforge/website.env
+        required: false          # present on the VM; optional so local `config` validates
+    volumes:
+      - /etc/natforge:/etc/natforge:ro   # GeoIP db + any file paths referenced by env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  core:
+    image: ghcr.io/evanlei-git/natforge-core:${NATFORGE_TAG:-latest}
+    pull_policy: always
+    network_mode: host
+    cap_add:
+      - NET_BIND_SERVICE           # bind :80/:443 as non-root (replaces the systemd AmbientCapability)
+    env_file:
+      - path: /etc/natforge/core.env
+        required: false
+    volumes:
+      - /etc/natforge:/etc/natforge:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      website: { condition: service_started }
+    restart: unless-stopped

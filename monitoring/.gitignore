@@ -1,0 +1,2 @@
+# Local secrets: the Grafana admin password lives here, never commit it.
+.env

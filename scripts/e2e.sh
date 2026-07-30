@@ -27,6 +27,10 @@ mkdir -p /tmp/nf_http; echo "HELLO-OVER-HTTP-SUBDOMAIN" > /tmp/nf_http/index.htm
 python3 -m http.server 8000 --directory /tmp/nf_http >/tmp/nf_o_http.log 2>&1 & PIDS+=($!)
 openssl req -x509 -newkey rsa:2048 -keyout /tmp/nf_k.pem -out /tmp/nf_c.pem -days 1 -nodes -subj '/CN=origin.local' >/dev/null 2>&1
 openssl s_server -accept 9443 -www -cert /tmp/nf_c.pem -key /tmp/nf_k.pem >/tmp/nf_o_https.log 2>&1 & PIDS+=($!)
+# A self-signed *.natforge.com wildcard so the core can terminate HTTPS for
+# http-mode subdomains (the auto-HTTPS feature).
+openssl req -x509 -newkey rsa:2048 -keyout /tmp/nf_wild_k.pem -out /tmp/nf_wild_c.pem -days 1 -nodes \
+  -subj '/CN=*.natforge.com' -addext 'subjectAltName=DNS:*.natforge.com' >/dev/null 2>&1
 python3 -c "import socket
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',25565)); s.listen()
 while True:
@@ -38,6 +42,7 @@ start_planes() {
   # with unrelated local containers on this dev box; the data plane is port-agnostic.
   PUBLIC_HOST=natforge.com CONTROL_ENDPOINT=127.0.0.1:4000 NODE_NAME=Local NODE_REGION=Local \
     HTTP_PORT=18080 HTTPS_PORT=8443 RUST_LOG=warn \
+    WILDCARD_CERT_PATH=/tmp/nf_wild_c.pem WILDCARD_KEY_PATH=/tmp/nf_wild_k.pem \
     ./target/debug/core_proxy_backend >/tmp/nf_core.log 2>&1 & PIDS+=($!)
   for i in $(seq 1 60); do
     [ "$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3000/ 2>/dev/null)" = "303" ] && \
@@ -80,6 +85,17 @@ sleep 3
 { [ "$(curl -s -H "Host: $SUB.natforge.com" http://127.0.0.1:18080/)" = "HELLO-OVER-HTTP-SUBDOMAIN" ] && \
   [ "$(curl -s -H "Host: $SUB2.natforge.com" http://127.0.0.1:18080/)" = "HELLO-OVER-HTTP-SUBDOMAIN" ]; } \
   && ok "two users share :18080 by distinct subdomain" || bad "two users share :18080"
+
+# auto-HTTPS: $SUB2 has only an http route, so the core terminates TLS with the
+# *.natforge.com wildcard cert and forwards plain HTTP to the origin, giving a
+# plain-HTTP service a valid https://. The presented cert is the wildcard, not the
+# passthrough origin cert (CN=origin.local) used by the $SUB https route above.
+WILD_BODY=$(curl -sk --resolve "$SUB2.natforge.com:8443:127.0.0.1" "https://$SUB2.natforge.com:8443/")
+WILD_SUBJ=$(echo | openssl s_client -connect 127.0.0.1:8443 -servername "$SUB2.natforge.com" 2>/dev/null \
+  | openssl x509 -noout -subject 2>/dev/null)
+{ [ "$WILD_BODY" = "HELLO-OVER-HTTP-SUBDOMAIN" ] && echo "$WILD_SUBJ" | grep -q 'natforge.com'; } \
+  && ok "auto-HTTPS: http route terminated with wildcard cert (:8443)" \
+  || bad "auto-HTTPS termination (body=$WILD_BODY subj=$WILD_SUBJ)"
 
 # multi-route over one session (http + tcp)
 { [ "$(curl -s -H "Host: $SUB.natforge.com" http://127.0.0.1:18080/)" = "HELLO-OVER-HTTP-SUBDOMAIN" ] && \

@@ -1,0 +1,4 @@
+# Triaged, non-applicable HIGH/CRITICAL image CVEs (one RUSTSEC/CVE id per line,
+# each with a one-line reason). Populate as Trivy findings are reviewed. Only
+# *fixable* advisories gate the build (ignore-unfixed is on in cd.yml), so keep
+# this accountable, exactly like .cargo/audit.toml. Empty is fine to start.

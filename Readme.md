@@ -108,6 +108,10 @@ The thesis defense will feature a multi-device live demonstration:
 - **Stateful Authentication:** JWTs from the device-login phase authorize tunnel creation and prevent hijacking, following RFC 7519 [9]; scoped tunnel tokens bind a single subdomain. Banned accounts are refused at login and cannot reserve tunnels.
 - **Output Encoding (XSS):** The dashboards render user-controlled strings (emails, tunnel names, region labels) only through context-aware encoders, `escapeHtml` for element text and `escapeAttr` (`JSON.stringify` + HTML-encode) for inline event-handler attributes, closing a stored-XSS vector where a crafted tunnel name could otherwise execute in an admin's session.
 - **CI & automated security scanning:** GitHub Actions runs lint (`fmt` + `clippy -D warnings`), unit tests, a release build, and the full 27-assertion e2e on every push/PR, plus a security layer, **cargo-audit** (RustSec CVEs, triaged in `.cargo/audit.toml`), **gitleaks** (secret scanning), and **Dependabot** (weekly dependency updates). See `docs/ci.md` and `Thesis.md` §5.5.
+- **Continuous deployment & monitoring:** on merge to `main`, the server is built into Docker images (pushed to `ghcr.io`), **Trivy**-scanned, and deployed to the VM (`docker compose pull && up -d`, with a reachability gate, a post-deploy health check, and a manual "Deploy" button). The agent is published as `x86_64` **glibc + static-musl** binaries on a rolling `latest` release; the static-musl build runs on **any** Linux distro (verified on Alpine, which has no glibc). An off-VM GitHub Actions **uptime** watcher emails you on downtime. See `docs/cd.md`, `docs/monitoring.md`, and `Thesis.md` §5.6, §5.7. Install the agent:
+  ```sh
+  curl -L https://github.com/EvanLei-git/Thesis-reverse-proxy/releases/latest/download/natforge-x86_64-linux-musl -o natforge && chmod +x natforge
+  ```
 
 ## 8. Project Structure and Documentation
 

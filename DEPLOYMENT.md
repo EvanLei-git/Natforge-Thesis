@@ -184,3 +184,25 @@ sudo systemctl restart natforge-website
  live tunnel within ~3s). The VM redeploy is still just website + static frontend; users pick up
  the new behaviour by rebuilding/redownloading the agent. The control plane edit endpoint and the
  Stop/Delete split work regardless of agent version, only the *live re-route* needs the new agent.
+
+## 6. Container deployment (CD)
+
+The `rsync` + build-on-VM loop of §5 is superseded by the containerised CD pipeline
+(full reference: `docs/cd.md`; rationale: `Thesis.md` §5.6). In short: CI builds the
+`website` + `core` Docker images, pushes them to `ghcr.io`, Trivy-scans them, and
+deploys them to the VM as `docker compose -f docker-compose.deploy.yml pull && up -d`
+(the core runs with host networking + `NET_BIND_SERVICE`, replacing the systemd unit;
+secrets stay in `/etc/natforge/*.env`). No more `cargo build` on the VM.
+
+Key operator steps (once):
+1. Repo secrets `DEPLOY_HOST` and `DEPLOY_SSH_KEY` (reuse `~/.ssh/natforge_azure`).
+2. On the VM: `docker login ghcr.io` with a `read:packages` token so it can pull the
+   private images.
+
+Then deploy from Actions -> CD -> "Run workflow" (or automatically on merge to `main`).
+Roll back with `NATFORGE_TAG=<previous-sha> docker compose -f docker-compose.deploy.yml up -d`.
+
+**Staged cutover from systemd:** stop (do not remove) `natforge-website`/`natforge-core`,
+bring the container stack up, verify the dashboard + a tunnel; if anything misbehaves,
+`docker compose ... down` and `systemctl start` the old units. Remove the units only
+once the container path is proven over a few deploys.

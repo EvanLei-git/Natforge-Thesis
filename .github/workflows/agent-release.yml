@@ -1,0 +1,84 @@
+name: Agent release
+
+# Build the natforge agent for x86_64 Linux in two flavours and publish them to a
+# rolling "latest" pre-release so client machines can just download a binary:
+#   - gnu:  dynamically linked against glibc (modern Linux).
+#   - musl: fully static, no libc dependency -> runs on ANY x86_64 Linux distro.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write            # create/update the release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            cross: false
+            asset: natforge-x86_64-linux-gnu
+          - target: x86_64-unknown-linux-musl
+            cross: true
+            asset: natforge-x86_64-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: agent-${{ matrix.target }}
+      - name: Install cross (for the musl target)
+        if: matrix.cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: Build (native gnu)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }} -p natforge
+      - name: Build (static musl via cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }} -p natforge
+      - name: Stage binary
+        run: install -m 0755 target/${{ matrix.target }}/release/natforge "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish rolling 'latest' pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: NatForge agent (latest build)
+          prerelease: true
+          fail_on_unmatched_files: true
+          files: dist/*
+          body: |
+            Rolling build of the NatForge agent (`natforge`) from `main`.
+
+            - **`natforge-x86_64-linux-gnu`** — dynamically linked against glibc; runs on modern Linux (glibc >= the build host's).
+            - **`natforge-x86_64-linux-musl`** — fully **static** (musl libc baked in, zero dynamic dependencies); runs on **any** x86_64 Linux distro, old or new, including Alpine.
+
+            Install (static build, works anywhere):
+            ```sh
+            curl -L https://github.com/EvanLei-git/Thesis-reverse-proxy/releases/latest/download/natforge-x86_64-linux-musl -o natforge
+            chmod +x natforge
+            ./natforge service-host --route 8080:http --control-plane http://natforge.com:3000
+            ```

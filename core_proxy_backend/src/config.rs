@@ -46,6 +46,10 @@ pub struct Config {
     pub dashboard_addr: String,
     pub cf_api_token: String,
     pub cf_zone_id: String,
+    /// Optional PEM cert + key for terminating public HTTPS on http-mode user
+    /// subdomains with a `*.<public_host>` wildcard certificate. Unset = disabled.
+    pub wildcard_cert_path: Option<String>,
+    pub wildcard_key_path: Option<String>,
 }
 
 impl Config {
@@ -87,6 +91,12 @@ impl Config {
                 .unwrap_or_else(|_| "127.0.0.1:3000".to_string()),
             cf_api_token: env::var("CF_API_TOKEN").unwrap_or_else(|_| "mock_token".to_string()),
             cf_zone_id: env::var("CF_ZONE_ID").unwrap_or_else(|_| "mock_zone".to_string()),
+            wildcard_cert_path: env::var("WILDCARD_CERT_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            wildcard_key_path: env::var("WILDCARD_KEY_PATH")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
         }
     }
 }

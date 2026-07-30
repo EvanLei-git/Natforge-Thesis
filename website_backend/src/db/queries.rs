@@ -948,6 +948,19 @@ pub async fn stats(pg: &PgPool) -> anyhow::Result<Stats> {
     })
 }
 
+/// Dedicated TCP-pool ports currently allocated to a tunnel, and the pool's total
+/// capacity. Lets the dashboard watch how close a node is to its port limit.
+pub async fn port_pool_usage(pg: &PgPool) -> anyhow::Result<(i64, i64)> {
+    let used: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM port_pool WHERE tunnel_id IS NOT NULL")
+            .fetch_one(pg)
+            .await?;
+    let total: i64 = sqlx::query_scalar("SELECT count(*) FROM port_pool")
+        .fetch_one(pg)
+        .await?;
+    Ok((used, total))
+}
+
 // --------------------------------------------------------------------------
 // Nodes (data-plane VMs / regions)
 // --------------------------------------------------------------------------

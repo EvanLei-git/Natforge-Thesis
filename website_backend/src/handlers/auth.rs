@@ -135,6 +135,7 @@ pub async fn login_user(
     if user.banned {
         return Err((StatusCode::FORBIDDEN, "this account is banned".into()));
     }
+    state.metrics.signins.with_label_values(&["password"]).inc();
     let token = issue_session(&state.config.jwt_secret, user.id, &user.email, &user.role);
     Ok(Json(AuthResponse {
         token,
@@ -214,6 +215,11 @@ pub async fn device_token(
                 match user {
                     Some(u) if u.banned => Ok(Json(json!({ "status": "banned" }))),
                     Some(u) => {
+                        state
+                            .metrics
+                            .signins
+                            .with_label_values(&["device_code"])
+                            .inc();
                         let token =
                             issue_session(&state.config.jwt_secret, u.id, &u.email, &u.role);
                         Ok(Json(

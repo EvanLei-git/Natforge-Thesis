@@ -9,11 +9,13 @@
 //! different subdomains on one connection is out of scope (matches the L4 model).
 
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt, copy_bidirectional};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -38,6 +40,60 @@ fn subdomain_of(host: &str) -> String {
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// A stream that first replays a `prefix` (bytes already read off `inner`) and then
+/// delegates to `inner`. Used to hand a consumed TLS ClientHello back to a
+/// `TlsAcceptor` when terminating HTTPS for an `http`-mode subdomain, so the peeked
+/// bytes are not lost.
+struct PrefixedStream<S> {
+    prefix: Vec<u8>,
+    pos: usize,
+    inner: S,
+}
+
+impl<S> PrefixedStream<S> {
+    fn new(prefix: Vec<u8>, inner: S) -> Self {
+        Self {
+            prefix,
+            pos: 0,
+            inner,
+        }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for PrefixedStream<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.pos < this.prefix.len() {
+            let remaining = &this.prefix[this.pos..];
+            let n = remaining.len().min(buf.remaining());
+            buf.put_slice(&remaining[..n]);
+            this.pos += n;
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedStream<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -179,7 +235,26 @@ async fn serve_https(state: Arc<CoreState>, mut inbound: TcpStream, peer: Socket
         }
     };
     let sub = subdomain_of(&sni);
-    route_and_splice(state, inbound, peer, buf, sub, RouteMode::Https).await;
+    // An explicit `https` route means the user terminates TLS themselves: pass the
+    // encrypted stream through untouched (byte-exact ClientHello via the preamble).
+    if state.host_route(&sub, RouteMode::Https).await.is_some() {
+        route_and_splice(state, inbound, peer, buf, sub, RouteMode::Https).await;
+        return;
+    }
+    // Otherwise, if the subdomain has an `http` route and we hold a wildcard
+    // certificate, terminate TLS here and forward plain HTTP to the agent, so a
+    // plain-HTTP origin is reachable over https://<sub>.<apex> with a valid cert.
+    if let Some(acceptor) = state.wildcard_acceptor().await
+        && state.host_route(&sub, RouteMode::Http).await.is_some()
+    {
+        let prefixed = PrefixedStream::new(buf, inbound);
+        match acceptor.accept(prefixed).await {
+            Ok(tls) => route_and_splice(state, tls, peer, Vec::new(), sub, RouteMode::Http).await,
+            Err(e) => warn!("wildcard TLS handshake failed for '{sub}': {e}"),
+        }
+    }
+    // No matching route (or no wildcard cert): close. We cannot send an application
+    // error before completing the TLS handshake, so a silent close is the only option.
 }
 
 /// Bounds-checked TLS ClientHello SNI extractor (single-record ClientHello, which
@@ -268,14 +343,16 @@ fn parse_sni(b: &[u8]) -> Sni {
 // Shared splice
 // --------------------------------------------------------------------------
 
-async fn route_and_splice(
+async fn route_and_splice<S>(
     state: Arc<CoreState>,
-    mut inbound: TcpStream,
+    mut inbound: S,
     peer: SocketAddr,
     peeked: Vec<u8>,
     subdomain: String,
     mode: RouteMode,
-) {
+) where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let handle = match state.host_route(&subdomain, mode).await {
         Some(h) => h,
         None => {

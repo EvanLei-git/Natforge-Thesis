@@ -27,6 +27,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub db: Db,
     pub geo: crate::geo::GeoDb,
+    pub metrics: crate::metrics::Metrics,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -66,6 +67,7 @@ impl AppState {
             http: reqwest::Client::new(),
             db: Db { pg, redis },
             geo,
+            metrics: crate::metrics::Metrics::new(),
         }))
     }
 }

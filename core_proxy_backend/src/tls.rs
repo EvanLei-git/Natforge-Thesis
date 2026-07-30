@@ -53,3 +53,32 @@ pub fn fingerprint_of(cert: &CertificateDer<'_>) -> String {
     }
     s
 }
+
+/// Load a PEM certificate chain + private key from disk into a TLS acceptor used to
+/// terminate public HTTPS for `http`-mode user subdomains (a `*.<public_host>`
+/// wildcard certificate obtained out of band, e.g. via certbot DNS-01). Returns an
+/// error rather than panicking, so a missing or broken file just disables the
+/// feature instead of taking the node down.
+pub fn load_wildcard_acceptor(cert_path: &str, key_path: &str) -> anyhow::Result<TlsAcceptor> {
+    use rustls::pki_types::pem::PemObject;
+
+    let certs = CertificateDer::pem_file_iter(cert_path)
+        .with_context(|| format!("read {cert_path}"))?
+        .collect::<Result<Vec<CertificateDer<'static>>, _>>()
+        .context("parse certificate chain")?;
+    if certs.is_empty() {
+        anyhow::bail!("no certificates found in {cert_path}");
+    }
+    let key =
+        PrivateKeyDer::from_pem_file(key_path).with_context(|| format!("read/parse {key_path}"))?;
+
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .context("tls protocol versions")?
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .context("install wildcard cert")?;
+
+    Ok(TlsAcceptor::from(Arc::new(config)))
+}

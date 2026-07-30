@@ -76,6 +76,34 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Hot-reload the wildcard TLS certificate on renewal (certbot rewrites the PEM
+    // roughly every 60 days) so a renewal never needs a restart or drops tunnels.
+    if let (Some(cert), Some(key)) = (
+        config.wildcard_cert_path.clone(),
+        config.wildcard_key_path.clone(),
+    ) {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mtime = || std::fs::metadata(&cert).and_then(|m| m.modified()).ok();
+            let mut last = mtime();
+            let mut ticker = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                ticker.tick().await;
+                let now = mtime();
+                if now != last {
+                    match crate::tls::load_wildcard_acceptor(&cert, &key) {
+                        Ok(acceptor) => {
+                            st.set_wildcard_acceptor(Some(acceptor)).await;
+                            last = now;
+                            info!("wildcard TLS certificate reloaded");
+                        }
+                        Err(e) => tracing::warn!("wildcard TLS reload failed: {e}"),
+                    }
+                }
+            }
+        });
+    }
+
     // Agent control plane.
     {
         let st = state.clone();

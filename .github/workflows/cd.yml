@@ -1,0 +1,136 @@
+name: CD
+
+# Build the website + core images, push them to ghcr.io, Trivy-scan them, then
+# deploy to the VM. On a pull request this only builds + scans (no push, no deploy).
+# On a push to main it pushes and auto-deploys. The "Run workflow" button
+# (workflow_dispatch) lets you deploy on demand (e.g. right after starting the VM).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to deploy (default: the just-built commit)"
+        required: false
+        default: ""
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false        # never cancel an in-flight deploy
+
+permissions:
+  contents: read
+  packages: write                  # push images to ghcr.io
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: evanlei-git
+
+jobs:
+  images:
+    name: Build, scan, push images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [website, core]
+        include:
+          - app: website
+            dockerfile: website_backend/Dockerfile
+          - app: core
+            dockerfile: core_proxy_backend/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build image (load into daemon for scanning)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/natforge-${{ matrix.app }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/natforge-${{ matrix.app }}:latest
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+      - name: Trivy scan (fail on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.OWNER }}/natforge-${{ matrix.app }}:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.OWNER }}/natforge-${{ matrix.app }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.OWNER }}/natforge-${{ matrix.app }}:latest
+
+  deploy:
+    name: Deploy to the VM
+    needs: images
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: VM reachability gate (fail loudly if the VM is down)
+        # Probe the ORIGIN directly. DEPLOY_HOST is a grey (DNS-only) name -> the VM;
+        # the apex natforge.com is Cloudflare-proxied and would not prove the origin
+        # is up (Cloudflare answers even when the VM is down). See docs/https.md.
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          if ! timeout 15 bash -c 'until curl -fsS -o /dev/null --max-time 8 "http://$HOST:3000/"; do sleep 3; done'; then
+            echo "::error::VM origin ($HOST:3000) is not reachable. Start the VM and re-run this deploy (Actions -> CD -> Run workflow)."
+            exit 1
+          fi
+      - name: Copy compose files to the VM
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: azureuser
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: "docker-compose.yml,docker-compose.deploy.yml"
+          target: "~/natforge"
+      - name: Pull images + bring the stack up
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: azureuser
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: TAG
+          script: |
+            set -e
+            cd ~/natforge
+            export NATFORGE_TAG="${TAG:-${{ github.sha }}}"
+            echo "deploying tag $NATFORGE_TAG"
+            # Pull first, while the native services are still serving, to keep the
+            # cutover gap to a few seconds.
+            docker compose -f docker-compose.deploy.yml pull
+            # Cut over: stop + disable the native systemd services so the containers can
+            # bind the shared ports (and so a reboot does not race the units against the
+            # containers' restart:unless-stopped). Units stay installed for rollback:
+            # sudo systemctl start natforge-website natforge-core.
+            sudo systemctl disable --now natforge-website natforge-core 2>/dev/null || true
+            docker compose -f docker-compose.deploy.yml up -d
+            docker image prune -f
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+      - name: Post-deploy health check
+        run: |
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://natforge.com/ || true)
+            if [ "$code" = "303" ] || [ "$code" = "200" ]; then echo "healthy ($code)"; exit 0; fi
+            sleep 4
+          done
+          echo "::error::post-deploy health check failed (dashboard not responding). Roll back with: NATFORGE_TAG=<previous-sha> docker compose -f docker-compose.deploy.yml up -d"
+          exit 1
