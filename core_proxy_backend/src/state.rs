@@ -4,10 +4,11 @@
 //! yamux `mpsc::Sender`s are not serializable, so they cannot live in Redis).
 //! Redis holds a best-effort liveness mirror for future multi-node reads.
 //!
-//! Three registries:
+//! Four registries:
 //!   * `http_routes`  : subdomain  -> handle  (shared :80 Host routing)
 //!   * `https_routes` : subdomain  -> handle  (shared :443 SNI routing)
 //!   * `port_routes`  : public TCP port -> handle (dedicated raw-TCP ports)
+//!   * `udp_routes`   : public UDP port -> handle (dedicated raw-UDP ports)
 //!
 //! Plus `tunnels` (subdomain -> ActiveTunnel) for lifecycle/teardown.
 
@@ -57,6 +58,8 @@ pub struct ActiveTunnel {
     pub owner_id: i32,
     /// TCP public ports bound for this tunnel (for registry cleanup).
     pub public_ports: Vec<u16>,
+    /// UDP public ports bound for this tunnel (for registry cleanup).
+    pub udp_ports: Vec<u16>,
     /// Whether this tunnel registered http / https on its subdomain.
     pub has_http: bool,
     pub has_https: bool,
@@ -72,7 +75,8 @@ pub struct CoreState {
     pub tunnels: RwLock<HashMap<String, ActiveTunnel>>, // key = subdomain
     pub http_routes: RwLock<HashMap<String, RouteHandle>>, // key = subdomain
     pub https_routes: RwLock<HashMap<String, RouteHandle>>, // key = subdomain
-    pub port_routes: RwLock<HashMap<u16, RouteHandle>>, // key = public port
+    pub port_routes: RwLock<HashMap<u16, RouteHandle>>, // key = public TCP port
+    pub udp_routes: RwLock<HashMap<u16, RouteHandle>>,  // key = public UDP port
     pub redis: redis::aio::ConnectionManager,
     pub ddos: DdosProtector,
     pub blocked_ports: RwLock<Vec<u16>>,
@@ -105,6 +109,7 @@ impl CoreState {
             http_routes: RwLock::new(HashMap::new()),
             https_routes: RwLock::new(HashMap::new()),
             port_routes: RwLock::new(HashMap::new()),
+            udp_routes: RwLock::new(HashMap::new()),
             redis,
             ddos: DdosProtector::default(),
             blocked_ports: RwLock::new(vec![25, 465, 587]),
@@ -123,7 +128,7 @@ impl CoreState {
         match mode {
             RouteMode::Http => self.http_routes.read().await.get(subdomain).cloned(),
             RouteMode::Https => self.https_routes.read().await.get(subdomain).cloned(),
-            RouteMode::Tcp => None,
+            RouteMode::Tcp | RouteMode::Udp => None,
         }
     }
 

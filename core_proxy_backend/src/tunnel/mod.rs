@@ -12,11 +12,12 @@ pub mod shared;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
+use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{info, warn};
@@ -26,7 +27,9 @@ use crate::dns::CloudflareManager;
 use crate::jwt::verify_tunnel_token;
 use crate::reporter;
 use crate::state::{ActiveTunnel, CoreState, OpenStream, RouteHandle, TunnelStats};
-use natforge_proto::{AgentHello, CoreReply, RouteMode, RouteResult, encode_preamble};
+use natforge_proto::{
+    AgentHello, CoreReply, RouteMode, RouteResult, encode_preamble, read_datagram, write_datagram,
+};
 
 const MAX_FRAME: u32 = 1 << 20;
 
@@ -165,8 +168,9 @@ where
         }
     }
 
-    // 3. Bind dedicated TCP ports up front (so we can fail cleanly).
+    // 3. Bind dedicated TCP/UDP ports up front (so we can fail cleanly).
     let mut tcp_listeners: Vec<(u16, u16, TcpListener)> = Vec::new(); // (route_id, port, listener)
+    let mut udp_sockets: Vec<(u16, u16, UdpSocket)> = Vec::new(); // (route_id, port, socket)
     let mut planned: Vec<PlannedRoute> = Vec::new();
     for r in &claims.routes {
         let endpoint = match r.mode {
@@ -183,6 +187,21 @@ where
                         )
                         .await?;
                         anyhow::bail!("bind {port}: {e}");
+                    }
+                }
+                format!("{}:{}", cfg.public_host, port)
+            }
+            RouteMode::Udp => {
+                let port = r.public_port.unwrap_or(0);
+                match UdpSocket::bind(format!("0.0.0.0:{port}")).await {
+                    Ok(s) => udp_sockets.push((r.route_id, port, s)),
+                    Err(e) => {
+                        reject(
+                            &mut socket,
+                            format!("failed to bind public udp port {port}: {e}"),
+                        )
+                        .await?;
+                        anyhow::bail!("bind udp {port}: {e}");
                     }
                 }
                 format!("{}:{}", cfg.public_host, port)
@@ -223,11 +242,12 @@ where
 
     let stats = Arc::new(TunnelStats::default());
     let mut public_ports = Vec::new();
+    let mut udp_ports = Vec::new();
     let mut has_http = false;
     let mut has_https = false;
     let mut listener_handles = Vec::new();
 
-    // 5. Register routes + spawn tcp listeners.
+    // 5. Register routes + spawn tcp/udp listeners.
     for p in &planned {
         let handle = RouteHandle {
             tunnel_id,
@@ -270,10 +290,28 @@ where
                     listener_handles.push(jh);
                 }
             }
+            RouteMode::Udp => {
+                let port = p.public_port.unwrap_or(0);
+                udp_ports.push(port);
+                state.udp_routes.write().await.insert(port, handle.clone());
+                if let Some(idx) = udp_sockets
+                    .iter()
+                    .position(|(rid, _, _)| *rid == p.route_id)
+                {
+                    let (_, _, sock) = udp_sockets.remove(idx);
+                    let st = state.clone();
+                    let h = handle.clone();
+                    let jh = tokio::spawn(async move { udp_listener_loop(st, sock, h).await });
+                    listener_handles.push(jh);
+                }
+            }
         }
         // Per-tunnel DNS only for tcp routes: provision an SRV so players can use
-        // <sub>.<domain> instead of host:port. http/https are covered by the wildcard A.
-        if let Some(port) = p.public_port {
+        // <sub>.<domain> instead of host:port. http/https are covered by the wildcard
+        // A record; udp clients connect by host:port directly.
+        if p.mode == RouteMode::Tcp
+            && let Some(port) = p.public_port
+        {
             CloudflareManager::from_config(cfg)
                 .provision_srv(&state.http, &subdomain, &cfg.public_host, port)
                 .await
@@ -288,6 +326,7 @@ where
             subdomain: subdomain.clone(),
             owner_id,
             public_ports: public_ports.clone(),
+            udp_ports: udp_ports.clone(),
             has_http,
             has_https,
             stats: stats.clone(),
@@ -335,7 +374,7 @@ where
     // 7. Block until the agent's yamux session ends, then tear down.
     let _ = driver.await;
     reporter_handle.abort();
-    teardown(&state, tunnel_id, &subdomain, &public_ports).await;
+    teardown(&state, tunnel_id, &subdomain, &public_ports, &udp_ports).await;
     reporter::tunnel_down(&state, tunnel_id, &subdomain).await;
     info!("tunnel DOWN: id={tunnel_id} sub={subdomain}");
     Ok(())
@@ -348,6 +387,7 @@ pub(crate) async fn teardown(
     tunnel_id: i64,
     subdomain: &str,
     ports: &[u16],
+    udp_ports: &[u16],
 ) {
     if let Some(t) = state.tunnels.write().await.remove(subdomain) {
         for jh in t.listener_handles {
@@ -371,6 +411,14 @@ pub(crate) async fn teardown(
         for port in ports {
             if pr.get(port).map(|h| h.tunnel_id) == Some(tunnel_id) {
                 pr.remove(port);
+            }
+        }
+    }
+    {
+        let mut ur = state.udp_routes.write().await;
+        for port in udp_ports {
+            if ur.get(port).map(|h| h.tunnel_id) == Some(tunnel_id) {
+                ur.remove(port);
             }
         }
     }
@@ -465,4 +513,174 @@ async fn bridge_public_connection(
         }
         Err(e) => warn!("tcp relay closed: {e}"),
     }
+}
+
+// --------------------------------------------------------------------------
+// UDP routes
+// --------------------------------------------------------------------------
+
+/// How long a udp flow may go without a client datagram before it is reaped.
+const UDP_FLOW_IDLE: Duration = Duration::from_secs(60);
+/// Cap on concurrent udp flows per route (bounds memory against spoofed sources).
+const UDP_MAX_FLOWS: usize = 4096;
+
+/// Accept loop for a dedicated udp route's public port. UDP is connectionless, so
+/// a flow is keyed on the client's source address: the first datagram from a new
+/// source opens one yamux stream (carrying the routing preamble), and later
+/// datagrams from that source ride it. Flows expire on idle, and each flow task
+/// signals its close so the table stays bounded.
+async fn udp_listener_loop(state: Arc<CoreState>, socket: UdpSocket, handle: RouteHandle) {
+    let socket = Arc::new(socket);
+    let mut flows: HashMap<std::net::SocketAddr, mpsc::Sender<Vec<u8>>> = HashMap::new();
+    let (closed_tx, mut closed_rx) = mpsc::channel::<std::net::SocketAddr>(64);
+    let mut buf = vec![0u8; 65535];
+    loop {
+        tokio::select! {
+            Some(peer) = closed_rx.recv() => {
+                flows.remove(&peer);
+            }
+            r = socket.recv_from(&mut buf) => {
+                let (n, peer) = match r {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let mut data = buf[..n].to_vec();
+                if let Some(tx) = flows.get(&peer) {
+                    match tx.try_send(data) {
+                        Ok(()) => continue,
+                        // Congested: drop this datagram, keep the flow (UDP semantics).
+                        Err(mpsc::error::TrySendError::Full(_)) => continue,
+                        // Flow task ended: drop it and re-open below with this datagram.
+                        Err(mpsc::error::TrySendError::Closed(d)) => {
+                            flows.remove(&peer);
+                            data = d;
+                        }
+                    }
+                }
+                if flows.len() >= UDP_MAX_FLOWS {
+                    continue;
+                }
+                let peer_ip = peer.ip().to_string();
+                if !state.ddos.analyze_connection(&peer_ip).await {
+                    continue;
+                }
+                let country = state.geo.country(peer.ip());
+                if state
+                    .is_country_blocked(handle.tunnel_id, country.as_deref())
+                    .await
+                {
+                    reporter::report_conn_log(
+                        &state,
+                        &handle,
+                        &peer_ip,
+                        country.as_deref(),
+                        0,
+                        0,
+                        0,
+                        true,
+                    )
+                    .await;
+                    continue;
+                }
+                // Open the per-flow stream to the agent.
+                let (reply_tx, reply_rx) = oneshot::channel();
+                if handle
+                    .open_tx
+                    .send(OpenStream {
+                        route_id: handle.route_id,
+                        reply: reply_tx,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return; // tunnel gone
+                }
+                let stream = match reply_rx.await {
+                    Ok(Ok(s)) => s,
+                    _ => continue,
+                };
+                let (tx, rx) = mpsc::channel::<Vec<u8>>(256);
+                let _ = tx.try_send(data); // deliver the datagram that opened the flow
+                flows.insert(peer, tx);
+                let st = state.clone();
+                let h = handle.clone();
+                let sock = socket.clone();
+                let ctx = closed_tx.clone();
+                tokio::spawn(async move {
+                    udp_flow(st, h, sock, stream, peer, country, rx, ctx).await;
+                });
+            }
+        }
+    }
+}
+
+/// Relay one udp flow to the agent: client datagrams (fed over `rx`) go out framed
+/// on the stream; datagrams the agent returns are sent back to the client. The flow
+/// ends on idle, on stream close, or when the tunnel drops, and is logged like a
+/// tcp connection.
+#[allow(clippy::too_many_arguments)]
+async fn udp_flow(
+    state: Arc<CoreState>,
+    handle: RouteHandle,
+    socket: Arc<UdpSocket>,
+    stream: yamux::Stream,
+    peer: std::net::SocketAddr,
+    country: Option<String>,
+    mut rx: mpsc::Receiver<Vec<u8>>,
+    closed_tx: mpsc::Sender<std::net::SocketAddr>,
+) {
+    let mut s = stream.compat();
+    if s.write_all(&encode_preamble(handle.route_id, Some(peer), &[]))
+        .await
+        .is_err()
+    {
+        let _ = closed_tx.send(peer).await;
+        return;
+    }
+    let (mut sr, mut sw) = split(s);
+    let bytes_in = Arc::new(AtomicU64::new(0));
+    let bytes_out = Arc::new(AtomicU64::new(0));
+    let start = std::time::Instant::now();
+
+    // client -> agent (framed onto the stream); idle with no client datagram ends it.
+    let bi = bytes_in.clone();
+    let downstream = async move {
+        // Ends on idle timeout (Err) or channel close (Ok(None)).
+        while let Ok(Some(d)) = tokio::time::timeout(UDP_FLOW_IDLE, rx.recv()).await {
+            bi.fetch_add(d.len() as u64, Ordering::Relaxed);
+            if write_datagram(&mut sw, &d).await.is_err() {
+                break;
+            }
+        }
+    };
+    // agent -> client.
+    let bo = bytes_out.clone();
+    let sock = socket.clone();
+    let upstream = async move {
+        while let Ok(Some(d)) = read_datagram(&mut sr).await {
+            bo.fetch_add(d.len() as u64, Ordering::Relaxed);
+            let _ = sock.send_to(&d, peer).await;
+        }
+    };
+    tokio::select! {
+        _ = downstream => {}
+        _ = upstream => {}
+    }
+
+    let bin = bytes_in.load(Ordering::Relaxed);
+    let bout = bytes_out.load(Ordering::Relaxed);
+    handle.stats.bytes_in.fetch_add(bin, Ordering::Relaxed);
+    handle.stats.bytes_out.fetch_add(bout, Ordering::Relaxed);
+    reporter::report_conn_log(
+        &state,
+        &handle,
+        &peer.ip().to_string(),
+        country.as_deref(),
+        bin,
+        bout,
+        start.elapsed().as_millis(),
+        false,
+    )
+    .await;
+    let _ = closed_tx.send(peer).await;
 }

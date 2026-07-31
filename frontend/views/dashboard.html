@@ -34,11 +34,11 @@
                     <ol class="muted small" style="margin:0; padding-left:18px; line-height:1.9">
                         <li><strong>Request a tunnel</strong> - pick a subdomain (or leave it blank for a random one) and add a route per local port. Choose the route type:
                             <span class="badge http">http</span>/<span class="badge https">https</span> for websites/APIs (reached at <code>name.natforge.com</code>),
-                            <span class="badge tcp">tcp</span> for game and other raw servers (reached at <code>natforge.com:port</code>).</li>
+                            <span class="badge tcp">tcp</span>/<span class="badge udp">udp</span> for game and other raw servers (reached at <code>natforge.com:port</code>).</li>
                         <li><strong>Run the agent</strong> on the machine hosting your server using the printed command (no port-forwarding needed).</li>
                         <li><strong>Share</strong> the address shown for each route - <code>name.natforge.com</code> for a website, or <code>name.natforge.com:port</code> for a game server. That name points at the NatForge server (not your own IP), which relays to your machine.</li>
                     </ol>
-                    <p class="faint small mt" style="margin-bottom:0">Note: routes are TCP. UDP-only games (e.g. Rust, Valheim) aren't supported yet.</p>
+                    <p class="faint small mt" style="margin-bottom:0">Tip: <span class="badge tcp">tcp</span> and <span class="badge udp">udp</span> both get a dedicated public port, so UDP games (e.g. Valheim, Palworld) work too.</p>
                 </div>
             </div>
 
@@ -312,7 +312,7 @@
             div.innerHTML = `
                 <input type="number" class="input route-port" value="${port}" min="1" max="65535" title="local port" style="max-width:96px">
                 <select class="input route-mode" title="route type" style="max-width:110px">
-                    <option value="http">HTTP</option><option value="https">HTTPS</option><option value="tcp">TCP</option>
+                    <option value="http">HTTP</option><option value="https">HTTPS</option><option value="tcp">TCP</option><option value="udp">UDP</option>
                 </select>
                 <input type="text" class="input route-label" placeholder="label (optional)" maxlength="40" style="flex:1">
                 <button type="button" class="btn btn-secondary btn-icon" title="Remove route" onclick="this.closest('.route-row').remove()">${nfIcon('close')}</button>`;

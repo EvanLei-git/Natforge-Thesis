@@ -52,6 +52,7 @@ fn parse_kind(kind: &str) -> RouteMode {
     match kind {
         "http" => RouteMode::Http,
         "https" => RouteMode::Https,
+        "udp" => RouteMode::Udp,
         _ => RouteMode::Tcp,
     }
 }
@@ -60,7 +61,9 @@ fn endpoint(mode: RouteMode, subdomain: &str, domain: &str, public_port: Option<
     match mode {
         RouteMode::Http => format!("http://{subdomain}.{domain}"),
         RouteMode::Https => format!("https://{subdomain}.{domain}"),
-        RouteMode::Tcp => format!("{subdomain}.{domain}:{}", public_port.unwrap_or(0)),
+        RouteMode::Tcp | RouteMode::Udp => {
+            format!("{subdomain}.{domain}:{}", public_port.unwrap_or(0))
+        }
     }
 }
 
@@ -81,19 +84,20 @@ pub async fn request_tunnel(
             "at least one route is required".into(),
         ));
     }
-    // Per-tunnel route policy: <= 1 http, <= 1 https, <= 2 tcp.
-    let (mut http, mut https, mut tcp) = (0, 0, 0);
+    // Per-tunnel route policy: <= 1 http, <= 1 https, <= 2 tcp, <= 2 udp.
+    let (mut http, mut https, mut tcp, mut udp) = (0, 0, 0, 0);
     for r in &req.routes {
         match r.mode {
             RouteMode::Http => http += 1,
             RouteMode::Https => https += 1,
             RouteMode::Tcp => tcp += 1,
+            RouteMode::Udp => udp += 1,
         }
     }
-    if http > 1 || https > 1 || tcp > 2 {
+    if http > 1 || https > 1 || tcp > 2 || udp > 2 {
         return Err((
             StatusCode::BAD_REQUEST,
-            "at most 1 http, 1 https and 2 tcp routes per tunnel".into(),
+            "at most 1 http, 1 https, 2 tcp and 2 udp routes per tunnel".into(),
         ));
     }
     // Reject globally blocked local ports up front.
@@ -191,10 +195,10 @@ pub async fn request_tunnel(
         } else {
             None
         };
-        let public_port = if mode == RouteMode::Tcp {
-            r.public_port.map(|p| p as u16)
-        } else {
+        let public_port = if mode.is_host_routed() {
             None
+        } else {
+            r.public_port.map(|p| p as u16)
         };
         claims.push(RouteClaim {
             route_id: r.route_id as u16,

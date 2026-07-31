@@ -13,8 +13,8 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
+use tokio::net::{TcpStream, UdpSocket};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{error, info, warn};
 use yamux::{Config as YamuxConfig, Connection, Mode};
@@ -22,7 +22,10 @@ use yamux::{Config as YamuxConfig, Connection, Mode};
 // Handshake + preamble wire contract lives in the shared `natforge-proto` crate so
 // the agent and core can never drift; the agent only *reads* preambles (the core
 // writes them) and exchanges two length-prefixed JSON frames before the yamux upgrade.
-use natforge_proto::{AgentHello, AgentRouteBinding, CoreReply, RouteMode, read_preamble};
+use natforge_proto::{
+    AgentHello, AgentRouteBinding, CoreReply, RouteMode, read_datagram, read_preamble,
+    write_datagram,
+};
 
 const MAX_FRAME: u32 = 1 << 20;
 
@@ -65,10 +68,10 @@ struct RequestTunnelReq {
 }
 
 #[derive(Deserialize, Clone)]
-#[allow(dead_code)] // mode/public_endpoint are part of the wire shape, shown by the server
+#[allow(dead_code)] // public_endpoint is part of the wire shape, shown by the server
 struct ReservedRoute {
     route_id: u16,
-    mode: String,
+    mode: RouteMode,
     local_port: u16,
     public_endpoint: String,
 }
@@ -178,12 +181,13 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
         .ok_or_else(|| anyhow!("reservation did not include a control certificate fingerprint"))?;
     let mut socket = crate::tls::connect(tcp, fingerprint).await?;
 
-    // route_id -> local_port, learned from the reservation.
-    let routes: Arc<HashMap<u16, u16>> = Arc::new(
+    // route_id -> (mode, local_port), learned from the reservation. The mode tells
+    // handle_stream whether to bridge a local TCP connection or relay UDP datagrams.
+    let routes: Arc<HashMap<u16, (RouteMode, u16)>> = Arc::new(
         reservation
             .routes
             .iter()
-            .map(|r| (r.route_id, r.local_port))
+            .map(|r| (r.route_id, (r.mode, r.local_port)))
             .collect(),
     );
     let bindings: Vec<AgentRouteBinding> = reservation
@@ -212,7 +216,7 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
             info!("════════════════════════════════════════════════════");
             info!(" Tunnel LIVE  (tunnel {tunnel_id}, subdomain {subdomain})");
             for r in &confirmed {
-                let local = routes.get(&r.route_id).copied().unwrap_or(0);
+                let local = routes.get(&r.route_id).map(|(_, p)| *p).unwrap_or(0);
                 info!(
                     "   route {} [{:?}]  {}  ->  127.0.0.1:{}",
                     r.route_id, r.mode, r.public_endpoint, local
@@ -242,8 +246,9 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
 }
 
 /// Bridge one inbound multiplexed stream to its local service, dispatching by the
-/// route_id carried in the per-stream preamble.
-async fn handle_stream(stream: yamux::Stream, routes: Arc<HashMap<u16, u16>>) {
+/// route_id carried in the per-stream preamble. tcp/http/https bridge a local TCP
+/// connection; udp relays datagrams to a local UDP socket.
+async fn handle_stream(stream: yamux::Stream, routes: Arc<HashMap<u16, (RouteMode, u16)>>) {
     let mut remote = stream.compat();
     let (route_id, _peer, replay) = match read_preamble(&mut remote).await {
         Ok(v) => v,
@@ -252,10 +257,14 @@ async fn handle_stream(stream: yamux::Stream, routes: Arc<HashMap<u16, u16>>) {
             return;
         }
     };
-    let Some(&local_port) = routes.get(&route_id) else {
+    let Some(&(mode, local_port)) = routes.get(&route_id) else {
         warn!("stream for unknown route_id {route_id}");
         return;
     };
+    if mode == RouteMode::Udp {
+        udp_relay(remote, local_port).await;
+        return;
+    }
     let mut local = match TcpStream::connect(("127.0.0.1", local_port)).await {
         Ok(s) => s,
         Err(e) => {
@@ -272,5 +281,48 @@ async fn handle_stream(stream: yamux::Stream, routes: Arc<HashMap<u16, u16>>) {
     }
     if let Err(e) = copy_bidirectional(&mut remote, &mut local).await {
         warn!("local relay closed: {e}");
+    }
+}
+
+/// Relay one udp flow. The core's per-flow stream carries the client's datagrams
+/// (length-prefixed) inbound; datagrams the local service replies with go back the
+/// same way. A fresh ephemeral local socket per flow preserves the local service's
+/// per-client source separation. The flow ends when the core closes the stream.
+async fn udp_relay<S: AsyncRead + AsyncWrite + Unpin>(remote: S, local_port: u16) {
+    let sock = match UdpSocket::bind("127.0.0.1:0").await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("cannot bind local udp socket: {e}");
+            return;
+        }
+    };
+    if let Err(e) = sock.connect(("127.0.0.1", local_port)).await {
+        error!("cannot reach local udp service on 127.0.0.1:{local_port}: {e}");
+        return;
+    }
+    let sock = Arc::new(sock);
+    let (mut sr, mut sw) = split(remote);
+
+    // core stream -> local service
+    let s_in = sock.clone();
+    let downstream = async move {
+        while let Ok(Some(d)) = read_datagram(&mut sr).await {
+            if s_in.send(&d).await.is_err() {
+                break;
+            }
+        }
+    };
+    // local service -> core stream
+    let upstream = async move {
+        let mut buf = vec![0u8; 65535];
+        while let Ok(n) = sock.recv(&mut buf).await {
+            if write_datagram(&mut sw, &buf[..n]).await.is_err() {
+                break;
+            }
+        }
+    };
+    tokio::select! {
+        _ = downstream => {}
+        _ = upstream => {}
     }
 }

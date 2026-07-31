@@ -240,6 +240,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .badge.http  { color: var(--brand-bright); background: var(--brand-tint); text-transform: uppercase; }
 .badge.https { color: #9d8bff; background: rgba(157,139,255,.16); text-transform: uppercase; }
 .badge.tcp   { color: var(--amber); background: rgba(232,161,58,.14); text-transform: uppercase; }
+.badge.udp   { color: #4fd1c5; background: rgba(79,209,197,.14); text-transform: uppercase; }
 .badge.tag   { color: var(--text-muted); background: var(--bg-raised); text-transform: none; }
 
 .kbd, .endpoint { font-family: var(--mono); font-size: 12.5px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 7px; color: var(--text); }

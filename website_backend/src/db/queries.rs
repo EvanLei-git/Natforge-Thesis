@@ -278,7 +278,7 @@ pub async fn reserve_tunnel(
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        let public_port: Option<i32> = if *mode == RouteMode::Tcp {
+        let public_port: Option<i32> = if !mode.is_host_routed() {
             let port: Option<i32> = sqlx::query_scalar(
                 "WITH picked AS (
                      SELECT port FROM port_pool

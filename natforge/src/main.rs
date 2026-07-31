@@ -25,8 +25,8 @@ struct Cli {
 enum Mode {
     /// Expose local services through a reverse tunnel.
     ServiceHost {
-        /// A route to expose, as `<local_port>:<http|https|tcp>`. Repeatable.
-        /// Example: --route 8000:http --route 25565:tcp
+        /// A route to expose, as `<local_port>:<http|https|tcp|udp>`. Repeatable.
+        /// Example: --route 8000:http --route 25565:tcp --route 2456:udp
         #[arg(long = "route")]
         routes: Vec<String>,
 
@@ -62,7 +62,7 @@ fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteS
     let mut out = Vec::new();
     for spec in routes {
         let (port_s, mode_s) = spec.split_once(':').ok_or_else(|| {
-            anyhow!("invalid --route '{spec}', expected <local_port>:<http|https|tcp>")
+            anyhow!("invalid --route '{spec}', expected <local_port>:<http|https|tcp|udp>")
         })?;
         let local_port: u16 = port_s
             .parse()
@@ -71,6 +71,7 @@ fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteS
             "http" => RouteMode::Http,
             "https" => RouteMode::Https,
             "tcp" => RouteMode::Tcp,
+            "udp" => RouteMode::Udp,
             other => return Err(anyhow!("invalid mode '{other}' in --route '{spec}'")),
         };
         out.push(RouteSpec { mode, local_port });

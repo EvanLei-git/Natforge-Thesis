@@ -15,7 +15,7 @@
 use std::net::{IpAddr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 // ---------------------------------------------------------------------------
 // Route mode
@@ -31,6 +31,10 @@ pub enum RouteMode {
     Https,
     /// Raw TCP, matched by a dedicated public port from the pool.
     Tcp,
+    /// Raw UDP, matched by a dedicated public port from the pool. Each client flow
+    /// rides a per-flow yamux stream, datagrams length-prefixed (see
+    /// `write_datagram` / `read_datagram`).
+    Udp,
 }
 
 impl RouteMode {
@@ -39,6 +43,7 @@ impl RouteMode {
             RouteMode::Http => "http",
             RouteMode::Https => "https",
             RouteMode::Tcp => "tcp",
+            RouteMode::Udp => "udp",
         }
     }
     /// http/https share one subdomain and need no dedicated port.
@@ -147,10 +152,10 @@ impl TunnelClaims {
                         ));
                     }
                 }
-                RouteMode::Tcp => {
+                RouteMode::Tcp | RouteMode::Udp => {
                     if r.public_port.is_none() || r.host.is_some() {
                         return Err(format!(
-                            "route {} (tcp) must carry port and no host",
+                            "route {} (tcp/udp) must carry port and no host",
                             r.route_id
                         ));
                     }
@@ -259,6 +264,44 @@ pub async fn read_preamble<R: AsyncRead + Unpin>(
     Ok((route_id, peer, replay))
 }
 
+// ---------------------------------------------------------------------------
+// UDP datagram framing
+// ---------------------------------------------------------------------------
+//
+// A udp route carries each datagram over its per-flow yamux stream (after the
+// preamble), length-prefixed so datagram boundaries survive the reliable byte
+// stream: u16 big-endian length, then the payload. UDP payloads are <= 65507
+// bytes, always within u16.
+
+/// Largest datagram we frame (bounded by the u16 length prefix).
+pub const MAX_DATAGRAM: usize = u16::MAX as usize;
+
+/// Write one length-prefixed datagram, then flush (datagrams are latency-sensitive
+/// and must not be held back by the stream's write buffer).
+pub async fn write_datagram<W: AsyncWrite + Unpin>(w: &mut W, data: &[u8]) -> std::io::Result<()> {
+    let len = data.len().min(MAX_DATAGRAM) as u16;
+    w.write_all(&len.to_be_bytes()).await?;
+    w.write_all(&data[..len as usize]).await?;
+    w.flush().await?;
+    Ok(())
+}
+
+/// Read one length-prefixed datagram. Returns `Ok(None)` on a clean end of stream.
+pub async fn read_datagram<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Option<Vec<u8>>> {
+    let mut lb = [0u8; 2];
+    match r.read_exact(&mut lb).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u16::from_be_bytes(lb) as usize;
+    let mut buf = vec![0u8; len];
+    if len > 0 {
+        r.read_exact(&mut buf).await?;
+    }
+    Ok(Some(buf))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +345,19 @@ mod tests {
     async fn rejects_bad_magic() {
         let mut cur = std::io::Cursor::new(b"XXXX\x01\x00\x01\x00\x00\x00\x00\x00".to_vec());
         assert!(read_preamble(&mut cur).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn datagram_roundtrip() {
+        for payload in [&b""[..], &b"hello"[..], &vec![0xABu8; 1400][..]] {
+            let mut buf: Vec<u8> = Vec::new();
+            write_datagram(&mut buf, payload).await.unwrap();
+            let mut cur = std::io::Cursor::new(buf);
+            let got = read_datagram(&mut cur).await.unwrap();
+            assert_eq!(got.as_deref(), Some(payload));
+            // clean EOF after the framed datagram
+            assert!(read_datagram(&mut cur).await.unwrap().is_none());
+        }
     }
 
     #[test]

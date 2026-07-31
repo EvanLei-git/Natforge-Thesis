@@ -35,6 +35,11 @@ python3 -c "import socket
 s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',25565)); s.listen()
 while True:
     c,_=s.accept(); c.sendall(b'MC-OK\n'); c.close()" >/tmp/nf_o_tcp.log 2>&1 & PIDS+=($!)
+# UDP echo origin (stand-in for a UDP game server, e.g. Valheim/Palworld).
+python3 -c "import socket
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',25566))
+while True:
+    d,a=s.recvfrom(65535); s.sendto(b'UDP-OK:'+d,a)" >/tmp/nf_o_udp.log 2>&1 & PIDS+=($!)
 
 start_planes() {
   RUST_LOG=warn ./target/debug/website_backend >/tmp/nf_web.log 2>&1 & PIDS+=($!)
@@ -58,11 +63,12 @@ echo "### 3. register + reserve a 3-route tunnel + launch agent"
 TOK=$(curl -s 127.0.0.1:3000/api/auth/register -H 'content-type: application/json' \
   -d '{"email":"evan@natforge.com","password":"hunter2pass"}' | jq -r '.token//empty')
 RSV=$(curl -s 127.0.0.1:3000/api/tunnels/request -H "authorization: Bearer $TOK" -H 'content-type: application/json' \
-  -d '{"routes":[{"mode":"http","local_port":8000},{"mode":"https","local_port":9443},{"mode":"tcp","local_port":25565}]}')
+  -d '{"routes":[{"mode":"http","local_port":8000},{"mode":"https","local_port":9443},{"mode":"tcp","local_port":25565},{"mode":"udp","local_port":25566}]}')
 SUB=$(echo "$RSV"|jq -r .subdomain); TID=$(echo "$RSV"|jq -r .tunnel_id)
 TCP_PORT=$(echo "$RSV"|jq -r '.routes[]|select(.mode=="tcp")|.public_endpoint'|sed 's/.*://')
+UDP_PORT=$(echo "$RSV"|jq -r '.routes[]|select(.mode=="udp")|.public_endpoint'|sed 's/.*://')
 ./target/debug/natforge service-host --token "$TOK" \
-  --route 8000:http --route 9443:https --route 25565:tcp >/tmp/nf_agent.log 2>&1 & PIDS+=($!)
+  --route 8000:http --route 9443:https --route 25565:tcp --route 25566:udp >/tmp/nf_agent.log 2>&1 & PIDS+=($!)
 sleep 3
 echo "  reserved subdomain=$SUB tcp_port=$TCP_PORT"
 
@@ -75,6 +81,13 @@ curl -sk --resolve "$SUB.natforge.com:8443:127.0.0.1" "https://$SUB.natforge.com
   && ok "HTTPS via SNI passthrough (origin cert, :8443)" || bad "HTTPS via SNI passthrough"
 [ "$(timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$TCP_PORT; head -c5 <&3" 2>/dev/null)" = "MC-OK" ] \
   && ok "raw TCP via dedicated port $TCP_PORT" || bad "raw TCP via dedicated port"
+UDP_RES=$(python3 -c "import socket
+c=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); c.settimeout(4); c.sendto(b'ping',('127.0.0.1',$UDP_PORT))
+try:
+    d,_=c.recvfrom(65535); print(d.decode())
+except Exception: print('TIMEOUT')")
+[ "$UDP_RES" = "UDP-OK:ping" ] \
+  && ok "raw UDP via dedicated port $UDP_PORT" || bad "raw UDP via dedicated port ($UDP_RES)"
 
 # second user sharing :18080
 T2=$(curl -s 127.0.0.1:3000/api/auth/register -H 'content-type: application/json' -d '{"email":"x@y.z","password":"secondpass"}' | jq -r '.token//empty')
