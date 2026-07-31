@@ -46,6 +46,8 @@ pub struct TunnelRequestRes {
     pub node_id: String,
     /// SHA-256 fingerprint of the node's TLS control cert, for the agent to pin.
     pub control_cert_fingerprint: Option<String>,
+    /// User-owned hostname fronting this tunnel, if set.
+    pub custom_domain: Option<String>,
 }
 
 fn parse_kind(kind: &str) -> RouteMode {
@@ -221,6 +223,7 @@ pub async fn request_tunnel(
         reserved.tunnel_id,
         &reserved.subdomain,
         claims,
+        reserved.custom_domain.clone(),
     );
 
     tracing::info!(
@@ -248,6 +251,7 @@ pub async fn request_tunnel(
         region: host_node.region,
         node_id: host_node.node_id,
         control_cert_fingerprint: host_node.control_cert_fp,
+        custom_domain: reserved.custom_domain,
     }))
 }
 
@@ -360,6 +364,98 @@ pub async fn set_tunnel_region_blocks(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(json!({ "status": "updated", "country_codes": codes })))
+}
+
+#[derive(Deserialize)]
+pub struct SetCustomDomainReq {
+    pub domain: String,
+}
+
+/// Shape check for a user-owned FQDN: labels + dots, not under our apex, no
+/// scheme/port. Ownership itself is proven by the domain resolving to the node (and,
+/// with ACME, by answering the HTTP-01 challenge), not by this check.
+fn valid_custom_domain(d: &str, apex: &str) -> bool {
+    if !(4..=253).contains(&d.len()) {
+        return false;
+    }
+    if d.contains('/') || d.contains(':') || d.contains(' ') || !d.contains('.') {
+        return false;
+    }
+    if d == apex || d.ends_with(&format!(".{apex}")) {
+        return false; // must be the user's own domain, not a natforge.com name
+    }
+    d.split('.').all(|l| {
+        !l.is_empty()
+            && l.len() <= 63
+            && l.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+    })
+}
+
+/// PUT /api/tunnels/{id}/custom_domain - front the tunnel with a user-owned hostname.
+/// Takes effect on the running agent's next reconnect (the new token carries it).
+pub async fn set_custom_domain(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(tunnel_id): Path<i64>,
+    Json(req): Json<SetCustomDomainReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (subdomain, node_id) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
+    let domain = req.domain.trim().trim_end_matches('.').to_lowercase();
+    if !valid_custom_domain(&domain, &state.config.domain) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid domain: use a fully-qualified hostname you own, not a natforge.com name"
+                .into(),
+        ));
+    }
+    queries::set_custom_domain(&state.db.pg, tunnel_id, Some(&domain))
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(db) if db.constraint() == Some("tunnels_custom_domain_uq") => (
+                StatusCode::CONFLICT,
+                "that domain is already claimed".to_string(),
+            ),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        })?;
+    // Reconnect a live tunnel so the core learns the domain from a fresh token.
+    if queries::tunnel_status(&state.db.pg, tunnel_id)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("online")
+    {
+        signal_node_stop(&state, &subdomain, &node_id).await;
+    }
+    Ok(Json(json!({
+        "status": "custom_domain_set",
+        "domain": domain,
+        "cname_target": format!("edge.{}", state.config.domain),
+    })))
+}
+
+/// DELETE /api/tunnels/{id}/custom_domain - stop fronting the tunnel with a custom host.
+pub async fn clear_custom_domain(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(tunnel_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (subdomain, node_id) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
+    queries::set_custom_domain(&state.db.pg, tunnel_id, None)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if queries::tunnel_status(&state.db.pg, tunnel_id)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("online")
+    {
+        signal_node_stop(&state, &subdomain, &node_id).await;
+    }
+    Ok(Json(json!({ "status": "custom_domain_cleared" })))
 }
 
 /// A region as offered to the user when picking where a tunnel should live.

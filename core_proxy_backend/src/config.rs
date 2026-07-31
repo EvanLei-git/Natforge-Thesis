@@ -50,6 +50,15 @@ pub struct Config {
     /// subdomains with a `*.<public_host>` wildcard certificate. Unset = disabled.
     pub wildcard_cert_path: Option<String>,
     pub wildcard_key_path: Option<String>,
+    /// Automatic per-domain HTTPS (ACME/Let's Encrypt HTTP-01) for custom domains.
+    pub acme_enabled: bool,
+    pub acme_email: String,
+    /// Directory for issued custom-domain certs (per-domain subdirectories).
+    pub acme_dir: String,
+    /// Use the Let's Encrypt staging environment.
+    pub acme_staging: bool,
+    /// Override the ACME directory URL (e.g. a local pebble server for tests).
+    pub acme_directory_url: Option<String>,
 }
 
 impl Config {
@@ -97,8 +106,21 @@ impl Config {
             wildcard_key_path: env::var("WILDCARD_KEY_PATH")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
+            acme_enabled: env_bool("ACME_ENABLED", false),
+            acme_email: env::var("ACME_EMAIL").unwrap_or_default(),
+            acme_dir: env::var("ACME_DIR").unwrap_or_else(|_| "/etc/natforge/acme".to_string()),
+            acme_staging: env_bool("ACME_STAGING", false),
+            acme_directory_url: env::var("ACME_DIRECTORY_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
         }
     }
+}
+
+fn env_bool(key: &str, default: bool) -> bool {
+    env::var(key)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(default)
 }
 
 fn env_u16(key: &str, default: u16) -> u16 {

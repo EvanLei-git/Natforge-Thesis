@@ -124,6 +124,8 @@ pub struct TunnelView {
     /// The node hosting this tunnel + its human region label (for the location UI).
     pub node_id: Option<String>,
     pub region: Option<String>,
+    /// User-owned hostname fronting this tunnel, if set.
+    pub custom_domain: Option<String>,
     pub bytes_in: i64,
     pub bytes_out: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,

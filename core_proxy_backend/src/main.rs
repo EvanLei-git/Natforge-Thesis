@@ -4,6 +4,7 @@
 //! shared HTTP :80 and HTTPS :443 subdomain routers, and dedicated TCP ports per
 //! raw route. Also exposes a small internal API and periodically refreshes policy.
 
+pub mod acme;
 pub mod api;
 pub mod config;
 pub mod ddos;
@@ -27,6 +28,9 @@ use crate::state::CoreState;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     dotenvy::dotenv().ok();
+    // Install a process-default rustls crypto provider (ring) for libraries that
+    // expect one, e.g. the ACME client's HTTPS calls to the CA.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let config = Config::from_env();
     if config.jwt_secret == "natforge-dev-secret-change-me"
@@ -100,6 +104,18 @@ async fn main() -> anyhow::Result<()> {
                         Err(e) => tracing::warn!("wildcard TLS reload failed: {e}"),
                     }
                 }
+            }
+        });
+    }
+
+    // Periodically renew ACME certs for custom domains (best-effort).
+    if config.acme_enabled {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(6 * 3600));
+            loop {
+                ticker.tick().await;
+                st.acme.renew_due().await;
             }
         });
     }

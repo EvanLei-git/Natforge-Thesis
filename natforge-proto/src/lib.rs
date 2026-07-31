@@ -123,6 +123,10 @@ pub struct TunnelClaims {
     /// Token purpose discriminator ("tunnel").
     pub purpose: String,
     pub routes: Vec<RouteClaim>,
+    /// Optional user-owned hostname fronting this tunnel (e.g. play.mygame.com),
+    /// in addition to the assigned subdomain. Absent in older tokens (serde default).
+    #[serde(default)]
+    pub custom_domain: Option<String>,
     /// Expiry (unix seconds).
     pub exp: usize,
 }
@@ -382,6 +386,7 @@ mod tests {
                     public_port: Some(20001),
                 },
             ],
+            custom_domain: None,
             exp: 9999999999,
         };
         assert!(ok.validate_shape().is_ok());
@@ -398,6 +403,7 @@ mod tests {
                 host: Some("x".into()),
                 public_port: None,
             }],
+            custom_domain: None,
             exp: 9999999999,
         };
         assert!(bad.validate_shape().is_err());

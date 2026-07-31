@@ -68,6 +68,7 @@ pub struct ReservedTunnel {
     pub node_id: String,
     pub public_host: String,
     pub routes: Vec<RouteRow>,
+    pub custom_domain: Option<String>,
     pub reused: bool,
 }
 
@@ -133,6 +134,31 @@ async fn load_routes(
     .await?)
 }
 
+async fn load_custom_domain(
+    tx: &mut Transaction<'_, Postgres>,
+    tunnel_id: i64,
+) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, Option<String>>("SELECT custom_domain FROM tunnels WHERE id = $1")
+        .bind(tunnel_id)
+        .fetch_one(&mut **tx)
+        .await
+}
+
+/// Set (or clear, with `None`) a tunnel's custom domain. A duplicate hostname trips
+/// the `tunnels_custom_domain_uq` unique index, surfaced as a sqlx database error.
+pub async fn set_custom_domain(
+    pg: &PgPool,
+    tunnel_id: i64,
+    domain: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE tunnels SET custom_domain = $2 WHERE id = $1")
+        .bind(tunnel_id)
+        .bind(domain)
+        .execute(pg)
+        .await?;
+    Ok(())
+}
+
 async fn insert_tunnel(
     tx: &mut Transaction<'_, Postgres>,
     cand: &str,
@@ -196,6 +222,9 @@ pub async fn reserve_tunnel(
     .map_err(|e| ReserveError::Db(e.into()))?
     {
         let routes = load_routes(&mut tx, existing.id).await.map_err(ReserveError::Db)?;
+        let custom_domain = load_custom_domain(&mut tx, existing.id)
+            .await
+            .map_err(|e| ReserveError::Db(e.into()))?;
         let ex_node = existing.node_id.clone().unwrap_or_else(|| node_id.to_string());
         let ex_host = existing.public_host.clone();
         tx.commit().await.map_err(|e| ReserveError::Db(e.into()))?;
@@ -205,6 +234,7 @@ pub async fn reserve_tunnel(
             node_id: ex_node,
             public_host: ex_host,
             routes,
+            custom_domain,
             reused: true,
         });
     }
@@ -335,6 +365,7 @@ pub async fn reserve_tunnel(
         node_id: node_id.to_string(),
         public_host: public_host.to_string(),
         routes: out,
+        custom_domain: None,
         reused: false,
     })
 }
@@ -376,6 +407,12 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
             Some(nid) => get_node(pg, nid).await?.map(|n| n.region.unwrap_or(n.name)),
             None => None,
         };
+        let custom_domain: Option<String> = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT custom_domain FROM tunnels WHERE id = $1",
+        )
+        .bind(t.id)
+        .fetch_one(pg)
+        .await?;
         // Endpoints use the tunnel's own node public_host (region), not a global domain.
         let host = t.public_host.clone();
         let route_views = routes
@@ -399,6 +436,7 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
             owner_id: t.owner_id,
             node_id: t.node_id,
             region,
+            custom_domain,
             bytes_in,
             bytes_out,
             created_at: t.created_at,

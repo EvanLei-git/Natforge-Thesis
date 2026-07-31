@@ -142,6 +142,7 @@ where
     let subdomain = claims.subdomain.clone();
     let tunnel_id = claims.tunnel_id;
     let owner_id = claims.sub;
+    let custom_domain = claims.custom_domain.clone();
     let cfg = &state.config;
 
     // 2. Policy + ownership pre-checks (reject before committing anything).
@@ -260,6 +261,13 @@ where
         match p.mode {
             RouteMode::Http => {
                 has_http = true;
+                if let Some(cd) = &custom_domain {
+                    state
+                        .custom_http
+                        .write()
+                        .await
+                        .insert(cd.clone(), handle.clone());
+                }
                 state
                     .http_routes
                     .write()
@@ -268,6 +276,13 @@ where
             }
             RouteMode::Https => {
                 has_https = true;
+                if let Some(cd) = &custom_domain {
+                    state
+                        .custom_https
+                        .write()
+                        .await
+                        .insert(cd.clone(), handle.clone());
+                }
                 state
                     .https_routes
                     .write()
@@ -319,6 +334,15 @@ where
         }
     }
 
+    // For a custom-domain http route with no https route, obtain a per-domain cert
+    // so https://<custom> works (issued in the background; http keeps working).
+    if let Some(cd) = &custom_domain
+        && has_http
+        && !has_https
+    {
+        state.acme.ensure_cert(cd.clone());
+    }
+
     state.tunnels.write().await.insert(
         subdomain.clone(),
         ActiveTunnel {
@@ -327,6 +351,7 @@ where
             owner_id,
             public_ports: public_ports.clone(),
             udp_ports: udp_ports.clone(),
+            custom_domain: custom_domain.clone(),
             has_http,
             has_https,
             stats: stats.clone(),
@@ -374,7 +399,15 @@ where
     // 7. Block until the agent's yamux session ends, then tear down.
     let _ = driver.await;
     reporter_handle.abort();
-    teardown(&state, tunnel_id, &subdomain, &public_ports, &udp_ports).await;
+    teardown(
+        &state,
+        tunnel_id,
+        &subdomain,
+        &public_ports,
+        &udp_ports,
+        custom_domain.as_deref(),
+    )
+    .await;
     reporter::tunnel_down(&state, tunnel_id, &subdomain).await;
     info!("tunnel DOWN: id={tunnel_id} sub={subdomain}");
     Ok(())
@@ -388,6 +421,7 @@ pub(crate) async fn teardown(
     subdomain: &str,
     ports: &[u16],
     udp_ports: &[u16],
+    custom_domain: Option<&str>,
 ) {
     if let Some(t) = state.tunnels.write().await.remove(subdomain) {
         for jh in t.listener_handles {
@@ -420,6 +454,17 @@ pub(crate) async fn teardown(
             if ur.get(port).map(|h| h.tunnel_id) == Some(tunnel_id) {
                 ur.remove(port);
             }
+        }
+    }
+    if let Some(cd) = custom_domain {
+        let mut ch = state.custom_http.write().await;
+        if ch.get(cd).map(|h| h.tunnel_id) == Some(tunnel_id) {
+            ch.remove(cd);
+        }
+        drop(ch);
+        let mut cs = state.custom_https.write().await;
+        if cs.get(cd).map(|h| h.tunnel_id) == Some(tunnel_id) {
+            cs.remove(cd);
         }
     }
     // Remove the per-tunnel SRV record(s) if this tunnel had any tcp routes.

@@ -84,12 +84,25 @@ async fn stop_tunnel(
             for jh in &t.listener_handles {
                 jh.abort();
             }
-            (t.tunnel_id, t.public_ports.clone(), t.udp_ports.clone())
+            (
+                t.tunnel_id,
+                t.public_ports.clone(),
+                t.udp_ports.clone(),
+                t.custom_domain.clone(),
+            )
         })
     };
     match info {
-        Some((tunnel_id, ports, udp_ports)) => {
-            crate::tunnel::teardown(&state, tunnel_id, &subdomain, &ports, &udp_ports).await;
+        Some((tunnel_id, ports, udp_ports, custom_domain)) => {
+            crate::tunnel::teardown(
+                &state,
+                tunnel_id,
+                &subdomain,
+                &ports,
+                &udp_ports,
+                custom_domain.as_deref(),
+            )
+            .await;
             Ok(Json(
                 json!({ "status": "stopping", "subdomain": subdomain }),
             ))

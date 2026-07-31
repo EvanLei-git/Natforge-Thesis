@@ -47,6 +47,7 @@ pub fn issue_tunnel_token(
     tunnel_id: i64,
     subdomain: &str,
     routes: Vec<RouteClaim>,
+    custom_domain: Option<String>,
 ) -> String {
     let claims = TunnelClaims {
         v: 1,
@@ -55,6 +56,7 @@ pub fn issue_tunnel_token(
         subdomain: subdomain.to_string(),
         purpose: "tunnel".to_string(),
         routes,
+        custom_domain,
         exp: (now() + TUNNEL_TTL_SECS) as usize,
     };
     encode(

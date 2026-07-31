@@ -219,6 +219,17 @@
                     <pre class="block" style="margin-top:8px">natforge service-host \\\n  ${flags} \\\n  --token &lt;your session token&gt;</pre>
                 </details>
 
+                <label class="lbl mt">Custom domain</label>
+                <div class="row-inline" style="gap:8px; align-items:center; flex-wrap:wrap">
+                    ${t.custom_domain
+                        ? `<span class="badge tag">${escapeHtml(t.custom_domain)}</span>
+                           <button class="btn btn-secondary btn-sm" onclick="setCustomDomainPrompt(${t.tunnel_id})">${nfIcon('edit')} Change</button>
+                           <button class="btn btn-danger btn-sm" onclick="clearCustomDomain(${t.tunnel_id})">${nfIcon('trash')} Remove</button>`
+                        : `<span class="faint small">None.</span>
+                           <button class="btn btn-secondary btn-sm" onclick="setCustomDomainPrompt(${t.tunnel_id})">${nfIcon('link')} Use your own domain</button>`}
+                </div>
+                <p class="faint small" style="margin:4px 0 0">Point a CNAME for your hostname at <code>edge.${escapeHtml(location.hostname)}</code>; HTTPS is issued automatically once it resolves to us.</p>
+
                 <label class="lbl mt">Logging - bandwidth</label>
                 <div class="stat-grid" style="margin:6px 0 0">
                     <div class="stat green"><div class="label">Data in</div><div class="value">${fmtBytes(t.bytes_in)}</div></div>
@@ -294,6 +305,24 @@
                   if (id === selectedTunnelId) selectedTunnelId = null; loadTunnels(); }
             catch (err) { toast(err.message, 'danger'); }
         }
+        async function setCustomDomainPrompt(id) {
+            const cur = (tunnelsCache.find(t => t.tunnel_id === id) || {}).custom_domain || '';
+            const domain = prompt('Custom domain (a hostname you own, e.g. play.yourgame.com):', cur);
+            if (domain === null) return;
+            const d = domain.trim();
+            if (!d) return;
+            try {
+                const res = await API.setCustomDomain(id, d);
+                toast(`Custom domain set. Point a CNAME: ${d} -> ${res.cname_target}`, 'success');
+                loadTunnels();
+            } catch (err) { toast(err.message, 'danger'); }
+        }
+        async function clearCustomDomain(id) {
+            if (!confirm('Remove the custom domain from this tunnel?')) return;
+            try { await API.clearCustomDomain(id); toast('Custom domain removed', 'success'); loadTunnels(); }
+            catch (err) { toast(err.message, 'danger'); }
+        }
+
         async function editTunnel(id) {
             const t = tunnelsCache.find(x => x.tunnel_id === id);
             if (!t) return;

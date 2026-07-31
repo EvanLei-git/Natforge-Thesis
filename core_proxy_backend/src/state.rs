@@ -4,11 +4,12 @@
 //! yamux `mpsc::Sender`s are not serializable, so they cannot live in Redis).
 //! Redis holds a best-effort liveness mirror for future multi-node reads.
 //!
-//! Four registries:
+//! Registries:
 //!   * `http_routes`  : subdomain  -> handle  (shared :80 Host routing)
 //!   * `https_routes` : subdomain  -> handle  (shared :443 SNI routing)
 //!   * `port_routes`  : public TCP port -> handle (dedicated raw-TCP ports)
 //!   * `udp_routes`   : public UDP port -> handle (dedicated raw-UDP ports)
+//!   * `custom_http` / `custom_https` : full custom hostname -> handle
 //!
 //! Plus `tunnels` (subdomain -> ActiveTunnel) for lifecycle/teardown.
 
@@ -60,6 +61,8 @@ pub struct ActiveTunnel {
     pub public_ports: Vec<u16>,
     /// UDP public ports bound for this tunnel (for registry cleanup).
     pub udp_ports: Vec<u16>,
+    /// Custom hostname fronting this tunnel, if any (for registry cleanup).
+    pub custom_domain: Option<String>,
     /// Whether this tunnel registered http / https on its subdomain.
     pub has_http: bool,
     pub has_https: bool,
@@ -77,6 +80,8 @@ pub struct CoreState {
     pub https_routes: RwLock<HashMap<String, RouteHandle>>, // key = subdomain
     pub port_routes: RwLock<HashMap<u16, RouteHandle>>, // key = public TCP port
     pub udp_routes: RwLock<HashMap<u16, RouteHandle>>,  // key = public UDP port
+    pub custom_http: RwLock<HashMap<String, RouteHandle>>, // key = full custom hostname
+    pub custom_https: RwLock<HashMap<String, RouteHandle>>, // key = full custom hostname
     pub redis: redis::aio::ConnectionManager,
     pub ddos: DdosProtector,
     pub blocked_ports: RwLock<Vec<u16>>,
@@ -94,6 +99,8 @@ pub struct CoreState {
     /// SHA-256 fingerprint of our control certificate (agents pin this).
     pub control_cert_fp: String,
     pub http: reqwest::Client,
+    /// Automatic per-domain HTTPS for custom domains (ACME).
+    pub acme: Arc<crate::acme::AcmeState>,
 }
 
 impl CoreState {
@@ -103,6 +110,13 @@ impl CoreState {
         let geo = GeoDb::open(&config.geoip_db);
         let control = crate::tls::generate()?;
         let wildcard_tls = RwLock::new(load_wildcard_from_config(&config));
+        let acme = crate::acme::AcmeState::new(
+            config.acme_enabled,
+            config.acme_staging,
+            config.acme_directory_url.clone(),
+            config.acme_email.clone(),
+            config.acme_dir.clone(),
+        )?;
         Ok(Arc::new(CoreState {
             config,
             tunnels: RwLock::new(HashMap::new()),
@@ -110,6 +124,8 @@ impl CoreState {
             https_routes: RwLock::new(HashMap::new()),
             port_routes: RwLock::new(HashMap::new()),
             udp_routes: RwLock::new(HashMap::new()),
+            custom_http: RwLock::new(HashMap::new()),
+            custom_https: RwLock::new(HashMap::new()),
             redis,
             ddos: DdosProtector::default(),
             blocked_ports: RwLock::new(vec![25, 465, 587]),
@@ -120,6 +136,7 @@ impl CoreState {
             wildcard_tls,
             control_cert_fp: control.fingerprint,
             http: reqwest::Client::new(),
+            acme,
         }))
     }
 
@@ -128,6 +145,15 @@ impl CoreState {
         match mode {
             RouteMode::Http => self.http_routes.read().await.get(subdomain).cloned(),
             RouteMode::Https => self.https_routes.read().await.get(subdomain).cloned(),
+            RouteMode::Tcp | RouteMode::Udp => None,
+        }
+    }
+
+    /// Look up the routing handle for a full custom hostname (e.g. play.mygame.com).
+    pub async fn custom_host_route(&self, host: &str, mode: RouteMode) -> Option<RouteHandle> {
+        match mode {
+            RouteMode::Http => self.custom_http.read().await.get(host).cloned(),
+            RouteMode::Https => self.custom_https.read().await.get(host).cloned(),
             RouteMode::Tcp | RouteMode::Udp => None,
         }
     }

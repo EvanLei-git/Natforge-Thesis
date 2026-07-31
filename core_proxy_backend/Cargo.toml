@@ -25,3 +25,4 @@ rustls-pki-types = { version = "1", features = ["std"] }
 sha2 = "0.10"
 dotenvy = "0.15"
 anyhow.workspace = true
+instant-acme = { version = "0.8", default-features = false, features = ["ring", "hyper-rustls"] }

@@ -18,10 +18,11 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf, copy_bidirectional};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
+use tokio_rustls::TlsAcceptor;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info, warn};
 
-use crate::state::{CoreState, OpenStream};
+use crate::state::{CoreState, OpenStream, RouteHandle};
 use natforge_proto::{RouteMode, encode_preamble};
 
 const PEEK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -125,6 +126,12 @@ async fn serve_http(state: Arc<CoreState>, mut inbound: TcpStream, peer: SocketA
             Ok(Err(_)) => return,
         };
         buf.extend_from_slice(&tmp[..n]);
+        // ACME HTTP-01 validation hits `/.well-known/acme-challenge/<token>` on the
+        // custom domain (which points at us); answer it before subdomain routing.
+        if let Some(token) = acme_challenge_token(&buf) {
+            serve_acme_challenge(&state, &mut inbound, &token).await;
+            return;
+        }
         if let Some(h) = parse_host(&buf) {
             break h;
         }
@@ -152,8 +159,23 @@ async fn serve_http(state: Arc<CoreState>, mut inbound: TcpStream, peer: SocketA
         proxy_to_dashboard(inbound, buf, &state.config.dashboard_addr).await;
         return;
     }
-    let sub = subdomain_of(&host);
-    route_and_splice(state, inbound, peer, buf, sub, RouteMode::Http).await;
+    // A registered custom hostname wins; otherwise route by the *.apex subdomain.
+    let handle = match state.custom_host_route(&hostname, RouteMode::Http).await {
+        Some(h) => Some(h),
+        None => {
+            state
+                .host_route(&subdomain_of(&host), RouteMode::Http)
+                .await
+        }
+    };
+    match handle {
+        Some(h) => splice_to_route(state, inbound, peer, buf, h, RouteMode::Http).await,
+        None => {
+            let _ = inbound
+                .write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 18\r\n\r\nunknown tunnel host")
+                .await;
+        }
+    }
 }
 
 /// Forward a plain-HTTP connection (the apex / www host) to the local dashboard
@@ -189,6 +211,39 @@ fn parse_host(buf: &[u8]) -> Option<String> {
         }
     }
     None
+}
+
+/// If the buffered request line is `GET /.well-known/acme-challenge/<token> ...`,
+/// return the token (once the request line is complete).
+fn acme_challenge_token(buf: &[u8]) -> Option<String> {
+    const PREFIX: &[u8] = b"/.well-known/acme-challenge/";
+    let line_end = find_subsequence(buf, b"\r\n")?;
+    let mut parts = buf[..line_end].split(|&b| b == b' ');
+    let _method = parts.next()?;
+    let path = parts.next()?;
+    let token = path.strip_prefix(PREFIX)?;
+    std::str::from_utf8(token).ok().map(str::to_string)
+}
+
+/// Serve an ACME HTTP-01 key authorization (or 404 if the token is unknown).
+async fn serve_acme_challenge(state: &Arc<CoreState>, inbound: &mut TcpStream, token: &str) {
+    match state.acme.challenge_response(token).await {
+        Some(resp) => {
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                resp.len()
+            );
+            let _ = inbound.write_all(head.as_bytes()).await;
+            let _ = inbound.write_all(resp.as_bytes()).await;
+        }
+        None => {
+            let _ = inbound
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                )
+                .await;
+        }
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -234,27 +289,50 @@ async fn serve_https(state: Arc<CoreState>, mut inbound: TcpStream, peer: Socket
             _ => return, // NotTls / None / over cap -> close (cannot 404 under TLS)
         }
     };
+    let sni_host = sni
+        .split(':')
+        .next()
+        .unwrap_or(&sni)
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
     let sub = subdomain_of(&sni);
     // An explicit `https` route means the user terminates TLS themselves: pass the
-    // encrypted stream through untouched (byte-exact ClientHello via the preamble).
-    if state.host_route(&sub, RouteMode::Https).await.is_some() {
-        route_and_splice(state, inbound, peer, buf, sub, RouteMode::Https).await;
+    // encrypted stream through untouched (a custom hostname wins over the subdomain).
+    let passthrough = match state.custom_host_route(&sni_host, RouteMode::Https).await {
+        Some(h) => Some(h),
+        None => state.host_route(&sub, RouteMode::Https).await,
+    };
+    if let Some(h) = passthrough {
+        splice_to_route(state, inbound, peer, buf, h, RouteMode::Https).await;
         return;
     }
-    // Otherwise, if the subdomain has an `http` route and we hold a wildcard
-    // certificate, terminate TLS here and forward plain HTTP to the agent, so a
-    // plain-HTTP origin is reachable over https://<sub>.<apex> with a valid cert.
-    if let Some(acceptor) = state.wildcard_acceptor().await
-        && state.host_route(&sub, RouteMode::Http).await.is_some()
-    {
+    // Otherwise terminate TLS and forward plain HTTP to the agent, if we hold a cert
+    // for this name: the `*.<apex>` wildcard for a subdomain http route, or a
+    // per-domain ACME cert for a custom-domain http route. Decide first so the
+    // buffered ClientHello + socket are moved exactly once.
+    let terminate: Option<(TlsAcceptor, RouteHandle)> = if let (Some(acc), Some(h)) = (
+        state.wildcard_acceptor().await,
+        state.host_route(&sub, RouteMode::Http).await,
+    ) {
+        Some((acc, h))
+    } else if state.acme.has_cert(&sni_host) {
+        state
+            .custom_host_route(&sni_host, RouteMode::Http)
+            .await
+            .map(|h| (state.acme.acceptor(), h))
+    } else {
+        None
+    };
+    if let Some((acceptor, h)) = terminate {
         let prefixed = PrefixedStream::new(buf, inbound);
         match acceptor.accept(prefixed).await {
-            Ok(tls) => route_and_splice(state, tls, peer, Vec::new(), sub, RouteMode::Http).await,
-            Err(e) => warn!("wildcard TLS handshake failed for '{sub}': {e}"),
+            Ok(tls) => splice_to_route(state, tls, peer, Vec::new(), h, RouteMode::Http).await,
+            Err(e) => warn!("TLS termination failed for '{sni_host}': {e}"),
         }
     }
-    // No matching route (or no wildcard cert): close. We cannot send an application
-    // error before completing the TLS handshake, so a silent close is the only option.
+    // No matching route or cert: close. We cannot send an application error before
+    // completing the TLS handshake, so a silent close is the only option.
 }
 
 /// Bounds-checked TLS ClientHello SNI extractor (single-record ClientHello, which
@@ -343,28 +421,16 @@ fn parse_sni(b: &[u8]) -> Sni {
 // Shared splice
 // --------------------------------------------------------------------------
 
-async fn route_and_splice<S>(
+async fn splice_to_route<S>(
     state: Arc<CoreState>,
     mut inbound: S,
     peer: SocketAddr,
     peeked: Vec<u8>,
-    subdomain: String,
+    handle: RouteHandle,
     mode: RouteMode,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let handle = match state.host_route(&subdomain, mode).await {
-        Some(h) => h,
-        None => {
-            if mode == RouteMode::Http {
-                let _ = inbound
-                    .write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 18\r\n\r\nunknown tunnel host")
-                    .await;
-            }
-            return;
-        }
-    };
-
     let peer_ip = peer.ip().to_string();
     if !state.ddos.analyze_connection(&peer_ip).await {
         return;
@@ -520,5 +586,22 @@ mod tests {
         assert_eq!(subdomain_of("duck-a1b2.natforge.com:8080"), "duck-a1b2");
         assert_eq!(subdomain_of("X.Y.Z"), "x");
         assert_eq!(subdomain_of("solo"), "solo");
+    }
+
+    #[test]
+    fn acme_challenge_token_parse() {
+        assert_eq!(
+            acme_challenge_token(
+                b"GET /.well-known/acme-challenge/tok123 HTTP/1.1\r\nHost: play.example.com\r\n"
+            )
+            .as_deref(),
+            Some("tok123")
+        );
+        assert_eq!(acme_challenge_token(b"GET / HTTP/1.1\r\n"), None);
+        // request line not yet complete (no CRLF)
+        assert_eq!(
+            acme_challenge_token(b"GET /.well-known/acme-challenge/ab"),
+            None
+        );
     }
 }
