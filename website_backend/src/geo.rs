@@ -37,8 +37,9 @@ impl GeoDb {
     /// ISO-3166 alpha-2 country (uppercased) for an IP, or None when unknown.
     pub fn country(&self, ip: IpAddr) -> Option<String> {
         let reader = self.reader.as_ref()?;
-        let rec: geoip2::Country = reader.lookup(ip).ok()?;
-        rec.country?.iso_code.map(|c| c.to_uppercase())
+        let result = reader.lookup(ip).ok()?;
+        let rec: geoip2::Country = result.decode().ok()??;
+        rec.country.iso_code.map(|c| c.to_uppercase())
     }
 
     /// Resolve the caller's country from forwarded-IP headers (set by the edge /

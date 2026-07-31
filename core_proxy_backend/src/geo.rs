@@ -41,7 +41,8 @@ impl GeoDb {
     /// (no database, private/loopback address, or IP not present in the database).
     pub fn country(&self, ip: IpAddr) -> Option<String> {
         let reader = self.reader.as_ref()?;
-        let rec: geoip2::Country = reader.lookup(ip).ok()?;
-        rec.country?.iso_code.map(|c| c.to_uppercase())
+        let result = reader.lookup(ip).ok()?;
+        let rec: geoip2::Country = result.decode().ok()??;
+        rec.country.iso_code.map(|c| c.to_uppercase())
     }
 }
