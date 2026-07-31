@@ -61,6 +61,43 @@ pub fn certified_key(cert_pem: &str, key_pem: &str) -> anyhow::Result<Arc<Certif
     Ok(Arc::new(CertifiedKey::new(certs, signing_key)))
 }
 
+/// Create `dir` (recursively) restricted to the owner (0700) on Unix.
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir)
+    }
+}
+
+/// Write `data` to `path` restricted to the owner (0600) on Unix. Used for private
+/// keys, which must never be world-readable on a shared host.
+fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(data)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, data)
+    }
+}
+
 /// Obtain a certificate for `domain` from the ACME CA at `directory_url` via the
 /// HTTP-01 challenge, publishing the challenge response through `challenges` for the
 /// `:80` router to serve. Returns the (cert_chain_pem, private_key_pem).
@@ -196,6 +233,12 @@ impl AcmeState {
             acceptor,
             issuing: tokio::sync::Mutex::new(std::collections::HashSet::new()),
         });
+        // Ensure the credential directory is owner-only if it already exists.
+        #[cfg(unix)]
+        if state.dir.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&state.dir, std::fs::Permissions::from_mode(0o700));
+        }
         state.load_existing();
         if enabled {
             info!(
@@ -273,9 +316,10 @@ impl AcmeState {
         let (cert_pem, key_pem) =
             issue_certificate(&self.directory_url, &self.email, domain, &self.challenges).await?;
         let dir = self.dir.join(domain);
-        std::fs::create_dir_all(&dir).context("create acme cert dir")?;
+        create_private_dir(&dir).context("create acme cert dir")?;
+        // cert.pem is public; key.pem is a private key and must be owner-only.
         std::fs::write(dir.join("cert.pem"), &cert_pem).context("write cert.pem")?;
-        std::fs::write(dir.join("key.pem"), &key_pem).context("write key.pem")?;
+        write_private(&dir.join("key.pem"), key_pem.as_bytes()).context("write key.pem")?;
         let ck = certified_key(&cert_pem, &key_pem)?;
         self.store.insert(domain.to_string(), ck);
         info!("ACME certificate active for '{domain}'");
