@@ -4,8 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: '0 6 * * 1'   # Mondays 06:00 UTC - catch new advisories without a push
+  workflow_dispatch:      # manual: run a fresh scan on demand (Actions -> Security -> Run workflow)
 
 permissions:
   contents: read

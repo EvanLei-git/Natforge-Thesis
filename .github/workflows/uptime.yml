@@ -4,16 +4,13 @@ name: Uptime
 # tell you the VM itself is down. If a probe fails, the job fails and GitHub sends
 # you its built-in Actions-failure email -> that IS the alert (no extra setup).
 #
-# Interval note: scheduled runs consume Actions minutes, and each job is billed a
-# 1-minute minimum. On a PRIVATE repo (2000 free min/month, shared with CI/CD) an
-# hourly probe (~720 min/month) is the cost-safe default. Tighten the cron for
-# faster detection only if you make the repo public (unlimited Actions) or accept
-# the extra minutes; for minute-level checks a free external monitor (e.g.
-# UptimeRobot) avoids Actions minutes entirely.
+# Manual only: run it from Actions -> Uptime -> "Run workflow". The automatic hourly
+# schedule was removed because the VM is intentionally stopped much of the time, so a
+# timer would just fail and email every hour. To restore a schedule, add back e.g.:
+#   schedule:
+#     - cron: '23 * * * *'   # hourly
 
 on:
-  schedule:
-    - cron: '23 * * * *'      # hourly (offset off the top of the hour)
   workflow_dispatch:
 
 permissions:
