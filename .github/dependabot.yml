@@ -8,7 +8,12 @@ updates:
     groups:
       cargo-minor-patch:
         update-types: [minor, patch]
+      cargo-major:                 # one PR for all major bumps, reviewed together
+        update-types: [major]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    groups:
+      github-actions:              # one PR for all GitHub Action bumps
+        patterns: ["*"]

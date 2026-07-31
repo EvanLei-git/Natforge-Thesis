@@ -8,6 +8,10 @@ name: CD
 on:
   push:
     branches: [main]
+    paths-ignore:              # docs- or workflow-only changes need no rebuild or deploy
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
   pull_request:
   workflow_dispatch:
     inputs:
