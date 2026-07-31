@@ -85,6 +85,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4    # provides docker-compose*.yml for the scp step below
       - name: VM reachability gate (fail loudly if the VM is down)
         # Probe the ORIGIN directly. DEPLOY_HOST is a grey (DNS-only) name -> the VM;
         # the apex natforge.com is Cloudflare-proxied and would not prove the origin
