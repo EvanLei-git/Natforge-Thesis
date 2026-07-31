@@ -72,3 +72,10 @@ Because the apex is proxied, `natforge.com` resolves to Cloudflare, not the VM.
 Reach the origin directly (admin SSH, the CD deploy, direct `:3000` checks) via the
 origin IP or any grey wildcard name (e.g. `deploy.natforge.com`), never via
 `natforge.com:22`. The `DEPLOY_HOST` repo secret is set to such a grey name.
+
+The **agent control plane** has the same constraint. The core's `CONTROL_ENDPOINT`
+(in `/etc/natforge/core.env`) is what agents are told to connect to for the yamux
+control channel on `:4000`, and Cloudflare does not carry `:4000`, so it must be a
+grey origin name (`control.natforge.com:4000`), not the proxied apex. Agents learn
+this endpoint from their tunnel reservation, so a wrong value silently breaks every
+new or reconnecting tunnel.
