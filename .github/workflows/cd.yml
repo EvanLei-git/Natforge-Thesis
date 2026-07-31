@@ -117,16 +117,16 @@ jobs:
             cd ~/natforge
             export NATFORGE_TAG="${TAG:-${{ github.sha }}}"
             echo "deploying tag $NATFORGE_TAG"
-            # Pull first, while the native services are still serving, to keep the
-            # cutover gap to a few seconds.
-            docker compose -f docker-compose.deploy.yml pull
+            # Pull first (as root: the /etc/natforge/*.env files are root-only 600),
+            # while the native services are still serving, to keep the cutover gap small.
+            sudo docker compose -f docker-compose.deploy.yml pull
             # Cut over: stop + disable the native systemd services so the containers can
             # bind the shared ports (and so a reboot does not race the units against the
             # containers' restart:unless-stopped). Units stay installed for rollback:
             # sudo systemctl start natforge-website natforge-core.
             sudo systemctl disable --now natforge-website natforge-core 2>/dev/null || true
-            docker compose -f docker-compose.deploy.yml up -d
-            docker image prune -f
+            sudo docker compose -f docker-compose.deploy.yml up -d
+            sudo docker image prune -f
         env:
           TAG: ${{ github.event.inputs.tag }}
       - name: Post-deploy health check
