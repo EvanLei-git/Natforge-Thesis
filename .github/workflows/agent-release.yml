@@ -27,7 +27,7 @@ jobs:
             cross: true
             asset: natforge-x86_64-linux-musl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -36,7 +36,7 @@ jobs:
           key: agent-${{ matrix.target }}
       - name: Install cross (for the musl target)
         if: matrix.cross
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.85.3
         with:
           tool: cross
       - name: Build (native gnu)
@@ -58,12 +58,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - name: Publish rolling 'latest' pre-release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
           name: NatForge agent (latest build)

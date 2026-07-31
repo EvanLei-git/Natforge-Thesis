@@ -46,20 +46,20 @@ jobs:
           - app: core
             dockerfile: core_proxy_backend/Dockerfile
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to ghcr.io
         # The ghcr packages predate CD (pushed manually) and a private repo cannot
         # grant its Actions token write access to them, so authenticate as the package
         # owner with a PAT (GHCR_TOKEN, write:packages) rather than GITHUB_TOKEN.
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4.5.2
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_TOKEN }}
       - name: Build image (load into daemon for scanning)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -70,7 +70,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=${{ matrix.app }}
       - name: Trivy scan (fail on HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.OWNER }}/natforge-${{ matrix.app }}:${{ github.sha }}
           severity: HIGH,CRITICAL
@@ -89,7 +89,7 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4    # provides docker-compose*.yml for the scp step below
+      - uses: actions/checkout@v7    # provides docker-compose*.yml for the scp step below
       - name: VM reachability gate (fail loudly if the VM is down)
         # Probe the ORIGIN directly. DEPLOY_HOST is a grey (DNS-only) name -> the VM;
         # the apex natforge.com is Cloudflare-proxied and would not prove the origin
