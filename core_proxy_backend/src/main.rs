@@ -108,6 +108,19 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Hot-reload the GeoIP database if it is refreshed on disk (e.g. by a cron
+    // running scripts/update-geoip.sh), so updates apply without a restart.
+    if !config.geoip_db.trim().is_empty() {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                ticker.tick().await;
+                st.geo.reload_if_changed();
+            }
+        });
+    }
+
     // Periodically renew ACME certs for custom domains (best-effort).
     if config.acme_enabled {
         let st = state.clone();
