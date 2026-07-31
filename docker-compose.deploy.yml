@@ -15,6 +15,11 @@ services:
     image: ghcr.io/evanlei-git/natforge-website:${NATFORGE_TAG:-latest}
     pull_policy: always
     network_mode: host
+    environment:
+      # The frontend is baked into the image at /app/frontend. website.env carries a
+      # host path (FRONTEND_DIR=/home/.../natforge/frontend) from the native deploy,
+      # which does not exist inside the container; this override wins over env_file.
+      FRONTEND_DIR: /app/frontend
     env_file:
       - path: /etc/natforge/website.env
         required: false          # present on the VM; optional so local `config` validates
@@ -31,11 +36,17 @@ services:
     network_mode: host
     cap_add:
       - NET_BIND_SERVICE           # bind :80/:443 as non-root (replaces the systemd AmbientCapability)
+    environment:
+      # Wildcard cert for auto-HTTPS on http user subdomains. Stays disabled until
+      # certbot issues it under /etc/letsencrypt (graceful-off if the file is absent).
+      WILDCARD_CERT_PATH: /etc/letsencrypt/live/natforge.com/fullchain.pem
+      WILDCARD_KEY_PATH: /etc/letsencrypt/live/natforge.com/privkey.pem
     env_file:
       - path: /etc/natforge/core.env
         required: false
     volumes:
       - /etc/natforge:/etc/natforge:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro   # host-issued wildcard cert (read-only)
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
