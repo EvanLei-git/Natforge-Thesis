@@ -74,6 +74,7 @@ class NatForgeAPI {
     setTunnelRegionBlocks(id, codes){ return this._req('PUT', `/tunnels/${encodeURIComponent(id)}/region_blocks`, { country_codes: codes }); }
     setCustomDomain(id, domain)     { return this._req('PUT', `/tunnels/${encodeURIComponent(id)}/custom_domain`, { domain }); }
     clearCustomDomain(id)           { return this._req('DELETE', `/tunnels/${encodeURIComponent(id)}/custom_domain`); }
+    migrateTunnel(id, node_id)      { return this._req('POST', `/tunnels/${encodeURIComponent(id)}/migrate`, { node_id }); }
 
     // --- User self-service (profile + password) ---
     getProfile()              { return this._req('GET', '/user/profile'); }

@@ -159,6 +159,69 @@ pub async fn set_custom_domain(
     Ok(())
 }
 
+/// Move a tunnel to another node/region: free the ports it holds on its current
+/// node, reallocate a port from the target node's pool for each tcp/udp route, and
+/// point the tunnel at the target node + its wildcard host. All in one transaction,
+/// so a full target pool rolls the whole move back. The subdomain is unchanged.
+pub async fn migrate_tunnel(
+    pg: &PgPool,
+    tunnel_id: i64,
+    target_node_id: &str,
+    target_public_host: &str,
+) -> Result<(), ReserveError> {
+    let mut tx = pg.begin().await.map_err(|e| ReserveError::Db(e.into()))?;
+    let routes = load_routes(&mut tx, tunnel_id)
+        .await
+        .map_err(ReserveError::Db)?;
+    // Free the ports this tunnel holds on its current node.
+    sqlx::query("UPDATE port_pool SET tunnel_id=NULL, route_id=NULL WHERE tunnel_id=$1")
+        .bind(tunnel_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ReserveError::Db(e.into()))?;
+    // Reallocate a dedicated port from the target node's pool per tcp/udp route.
+    for r in &routes {
+        if r.kind != "tcp" && r.kind != "udp" {
+            continue;
+        }
+        let port: Option<i32> = sqlx::query_scalar(
+            "WITH picked AS (
+                 SELECT port FROM port_pool
+                 WHERE node_id = $1 AND tunnel_id IS NULL
+                 ORDER BY port FOR UPDATE SKIP LOCKED LIMIT 1
+             )
+             UPDATE port_pool p SET tunnel_id = $2, route_id = $3
+             FROM picked WHERE p.node_id = $1 AND p.port = picked.port
+             RETURNING p.port",
+        )
+        .bind(target_node_id)
+        .bind(tunnel_id)
+        .bind(r.route_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| ReserveError::Db(e.into()))?;
+        let Some(port) = port else {
+            return Err(ReserveError::PortExhausted); // rollback frees everything
+        };
+        sqlx::query("UPDATE routes SET public_port=$1 WHERE tunnel_id=$2 AND route_id=$3")
+            .bind(port)
+            .bind(tunnel_id)
+            .bind(r.route_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ReserveError::Db(e.into()))?;
+    }
+    sqlx::query("UPDATE tunnels SET node_id=$2, public_host=$3 WHERE id=$1")
+        .bind(tunnel_id)
+        .bind(target_node_id)
+        .bind(target_public_host)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ReserveError::Db(e.into()))?;
+    tx.commit().await.map_err(|e| ReserveError::Db(e.into()))?;
+    Ok(())
+}
+
 async fn insert_tunnel(
     tx: &mut Transaction<'_, Postgres>,
     cand: &str,

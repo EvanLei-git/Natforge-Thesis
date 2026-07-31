@@ -458,6 +458,64 @@ pub async fn clear_custom_domain(
     Ok(Json(json!({ "status": "custom_domain_cleared" })))
 }
 
+#[derive(Deserialize)]
+pub struct MigrateReq {
+    pub node_id: String,
+}
+
+/// POST /api/tunnels/{id}/migrate - move a tunnel to another region/node. It keeps
+/// its subdomain and identity; its wildcard host and any pooled ports move to the
+/// target node. A live tunnel is dropped on its old node so the running agent
+/// re-reserves and reconnects onto the new one (~3s).
+pub async fn migrate_tunnel(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(tunnel_id): Path<i64>,
+    Json(req): Json<MigrateReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (subdomain, old_node) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
+    let target = queries::get_node(&state.db.pg, req.node_id.trim())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .filter(|n| n.active)
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "unknown or inactive region".to_string(),
+        ))?;
+    if old_node.as_deref() == Some(target.node_id.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "tunnel is already on that region".into(),
+        ));
+    }
+    queries::migrate_tunnel(
+        &state.db.pg,
+        tunnel_id,
+        &target.node_id,
+        &target.public_host,
+    )
+    .await
+    .map_err(|e| match e {
+        ReserveError::PortExhausted => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the target region's port pool is full".into(),
+        ),
+        ReserveError::Db(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("database error: {err}"),
+        ),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "migration failed".into()),
+    })?;
+    // Drop the live session on the OLD node so the agent re-reserves onto the new one.
+    signal_node_stop(&state, &subdomain, &old_node).await;
+    Ok(Json(json!({
+        "status": "migrated",
+        "tunnel_id": tunnel_id,
+        "node_id": target.node_id,
+        "region": target.region,
+    })))
+}
+
 /// A region as offered to the user when picking where a tunnel should live.
 #[derive(Serialize)]
 pub struct RegionOption {

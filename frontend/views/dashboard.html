@@ -230,6 +230,12 @@
                 </div>
                 <p class="faint small" style="margin:4px 0 0">Point a CNAME for your hostname at <code>edge.${escapeHtml(location.hostname)}</code>; HTTPS is issued automatically once it resolves to us.</p>
 
+                <label class="lbl mt">Region</label>
+                <div class="row-inline" style="gap:8px; align-items:center; flex-wrap:wrap">
+                    ${region || '<span class="faint small">default</span>'}
+                    <button class="btn btn-secondary btn-sm" onclick="migrateTunnelPrompt(${t.tunnel_id})">${nfIcon('globe')} Move region</button>
+                </div>
+
                 <label class="lbl mt">Logging - bandwidth</label>
                 <div class="stat-grid" style="margin:6px 0 0">
                     <div class="stat green"><div class="label">Data in</div><div class="value">${fmtBytes(t.bytes_in)}</div></div>
@@ -321,6 +327,20 @@
             if (!confirm('Remove the custom domain from this tunnel?')) return;
             try { await API.clearCustomDomain(id); toast('Custom domain removed', 'success'); loadTunnels(); }
             catch (err) { toast(err.message, 'danger'); }
+        }
+        async function migrateTunnelPrompt(id) {
+            try {
+                const regions = await API.getRegions();
+                if (!regions.length) { toast('No regions available', 'danger'); return; }
+                const list = regions.map((r, i) => `${i + 1}. ${r.region || r.name} (${r.node_id})`).join('\n');
+                const pick = prompt(`Move this tunnel to which region?\n${list}\n\nEnter the number:`);
+                if (pick === null) return;
+                const idx = parseInt(pick, 10) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= regions.length) { toast('Invalid choice', 'danger'); return; }
+                await API.migrateTunnel(id, regions[idx].node_id);
+                toast(`Migrating to ${regions[idx].region || regions[idx].name}. The agent reconnects in a few seconds.`, 'success');
+                loadTunnels();
+            } catch (err) { toast(err.message, 'danger'); }
         }
 
         async function editTunnel(id) {

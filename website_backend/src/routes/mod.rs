@@ -37,6 +37,10 @@ pub fn api_router(state: SharedState) -> Router {
             "/api/tunnels/{tunnel_id}/custom_domain",
             put(tunnels::set_custom_domain).delete(tunnels::clear_custom_domain),
         )
+        .route(
+            "/api/tunnels/{tunnel_id}/migrate",
+            post(tunnels::migrate_tunnel),
+        )
         .route("/api/regions", get(tunnels::list_regions))
         // --- User self-service ---
         .route(
