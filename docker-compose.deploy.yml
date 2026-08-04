@@ -20,6 +20,7 @@ services:
       # host path (FRONTEND_DIR=/home/.../natforge/frontend) from the native deploy,
       # which does not exist inside the container; this override wins over env_file.
       FRONTEND_DIR: /app/frontend
+      GEOIP_DB: /etc/natforge/GeoLite2-Country.mmdb   # same DB for login/registration geo-blocks
     env_file:
       - path: /etc/natforge/website.env
         required: false          # present on the VM; optional so local `config` validates
@@ -41,14 +42,25 @@ services:
       # certbot issues it under /etc/letsencrypt (graceful-off if the file is absent).
       WILDCARD_CERT_PATH: /etc/letsencrypt/live/natforge.com/fullchain.pem
       WILDCARD_KEY_PATH: /etc/letsencrypt/live/natforge.com/privkey.pem
+      # Automatic per-domain HTTPS (Let's Encrypt, HTTP-01) for user custom domains.
+      # Certs live on the writable natforge_acme volume (the /etc/natforge mount is ro).
+      ACME_ENABLED: "1"
+      ACME_DIR: /var/lib/natforge/acme
+      # GeoIP country blocking reads this MaxMind DB (provision with
+      # scripts/update-geoip.sh); absent => geo-blocking simply stays off.
+      GEOIP_DB: /etc/natforge/GeoLite2-Country.mmdb
     env_file:
       - path: /etc/natforge/core.env
         required: false
     volumes:
       - /etc/natforge:/etc/natforge:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro   # host-issued wildcard cert (read-only)
+      - natforge_acme:/var/lib/natforge/acme   # writable per-domain ACME cert storage
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
       website: { condition: service_started }
     restart: unless-stopped
+
+volumes:
+  natforge_acme:   # per-domain ACME certificates + account key (survives restarts)

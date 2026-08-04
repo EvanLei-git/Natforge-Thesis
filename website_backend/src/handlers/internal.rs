@@ -148,7 +148,6 @@ pub async fn policy(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     check_secret(&state, &headers)?;
-    let ports = queries::port_blocks(&state.db.pg).await.map_err(err)?;
     let regions = queries::region_blocks(&state.db.pg).await.map_err(err)?;
     let per_tunnel = queries::all_tunnel_region_blocks(&state.db.pg)
         .await
@@ -159,7 +158,6 @@ pub async fn policy(
         .map(|(k, v)| (k.to_string(), v))
         .collect();
     Ok(Json(json!({
-        "blocked_ports": ports,
         "blocked_regions": regions,
         "tunnel_region_blocks": per_tunnel,
     })))

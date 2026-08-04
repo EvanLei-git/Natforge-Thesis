@@ -116,4 +116,4 @@ pkill -9 -f '[t]arget/debug/natforge'
 
 ## D. What's mocked vs. real (so tests don't mislead you)
 
-Fully real and exercised by the tests above: the tunnel (HTTP/SNI/TCP), multi-route, auth + device flow, port blocking, the DDoS rate-guard, and Postgres+Redis persistence. **Region/geo blocking is managed in the UI but not enforced**; WireGuard encryption, kernel-eBPF drops, UDP hole punching, and multi-node forwarding are not implemented. Cloudflare SRV provisioning is real but only fires with a configured `CF_API_TOKEN` (it logs locally). See `Hosting.md` §8 for the full list.
+Fully real and exercised by the tests above: the tunnel (HTTP/SNI/TCP), multi-route, auth + device flow, and Postgres+Redis persistence. **Region/geo blocking is managed in the UI but not enforced**; WireGuard encryption, UDP hole punching, and multi-node forwarding are not implemented. Cloudflare SRV provisioning is real but only fires with a configured `CF_API_TOKEN` (it logs locally). See `Hosting.md` §8 for the full list.

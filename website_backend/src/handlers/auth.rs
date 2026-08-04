@@ -91,14 +91,9 @@ pub async fn register_user(
     {
         return Err((StatusCode::CONFLICT, "email already registered".into()));
     }
-    let user = queries::create_user(
-        &state.db.pg,
-        &email,
-        &hash_password(&payload.password),
-        &state.config.admin_email,
-    )
-    .await
-    .map_err(db_err)?;
+    let user = queries::create_user(&state.db.pg, &email, &hash_password(&payload.password))
+        .await
+        .map_err(db_err)?;
     tracing::info!(
         "registered {} (id {}, role {})",
         user.email,

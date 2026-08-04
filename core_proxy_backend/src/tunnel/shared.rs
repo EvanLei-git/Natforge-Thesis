@@ -432,10 +432,6 @@ async fn splice_to_route<S>(
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let peer_ip = peer.ip().to_string();
-    if !state.ddos.analyze_connection(&peer_ip).await {
-        return;
-    }
-
     let country = state.geo.country(peer.ip());
     // Geo-policy: drop (and log) connections from blocked countries. Under TLS we
     // cannot send a friendly error, so we simply close - matching the L4 model.

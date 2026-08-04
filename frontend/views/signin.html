@@ -4,14 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NatForge - Sign in</title>
-    <link rel="icon" href="../assets/img/natforge_flake.ico">
-    <link href="../assets/css/style.css" rel="stylesheet">
+    <link rel="icon" href="/assets/img/natforge_flake.ico">
+    <link href="/assets/css/style.css" rel="stylesheet">
 </head>
 <body>
     <div class="auth-wrap">
         <div class="auth-card">
             <div class="brand-head">
-                <img src="../assets/img/natforge_flake.png" alt="NatForge">
+                <img src="/assets/img/natforge_flake.png" alt="NatForge">
                 <div class="name">NatForge</div>
                 <div class="tag">Tunnel anything. No port forwarding.</div>
             </div>
@@ -46,16 +46,15 @@
                         <input type="password" id="regPassword" class="input" minlength="8" required>
                     </div>
                     <button type="submit" class="btn btn-primary btn-block">Create account</button>
-                    <p class="faint small mt">The first account created becomes the network administrator.</p>
                 </form>
             </div>
         </div>
     </div>
 
-    <script src="../api/client.js"></script>
-    <script src="../assets/js/app.js"></script>
+    <script src="/client.js"></script>
+    <script src="/assets/js/app.js"></script>
     <script>
-        function go(role) { window.location.href = role === 'admin' ? 'admin.html' : 'dashboard.html'; }
+        function go(role) { window.location.href = role === 'admin' ? '/admin/network' : '/dashboard'; }
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             try {

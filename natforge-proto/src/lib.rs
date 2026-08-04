@@ -35,6 +35,12 @@ pub enum RouteMode {
     /// rides a per-flow yamux stream, datagrams length-prefixed (see
     /// `write_datagram` / `read_datagram`).
     Udp,
+    /// Raw TCP **and** UDP on one dedicated public port (for game servers that use the
+    /// same port for both). This is a reservation/request-level mode only: the control
+    /// plane expands it into a `Tcp` claim and a `Udp` claim sharing the one pooled
+    /// port, so it never appears in a `RouteClaim` or on the wire, and the data plane
+    /// and agent handle the two halves exactly like independent tcp/udp routes.
+    Both,
 }
 
 impl RouteMode {
@@ -44,6 +50,7 @@ impl RouteMode {
             RouteMode::Https => "https",
             RouteMode::Tcp => "tcp",
             RouteMode::Udp => "udp",
+            RouteMode::Both => "both",
         }
     }
     /// http/https share one subdomain and need no dedicated port.
@@ -156,7 +163,9 @@ impl TunnelClaims {
                         ));
                     }
                 }
-                RouteMode::Tcp | RouteMode::Udp => {
+                // Both is expanded into tcp+udp claims before a token is minted, so it
+                // should never reach here; treat it like tcp/udp defensively.
+                RouteMode::Tcp | RouteMode::Udp | RouteMode::Both => {
                     if r.public_port.is_none() || r.host.is_some() {
                         return Err(format!(
                             "route {} (tcp/udp) must carry port and no host",

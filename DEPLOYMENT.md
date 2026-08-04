@@ -104,16 +104,14 @@ The release build needs a C toolchain + OpenSSL headers (`build-essential pkg-co
 libssl-dev`) because `reqwest`'s default TLS pulls `native-tls`. First release build was
 ~7.5 min on 2 cores; incremental rebuilds ~3 min. 7.7 GB RAM was ample (no swap needed).
 
-### 3.10 "Everyone who signs up gets admin?", no, but hardened anyway
-Reported worry that every signup became admin. Verified on the live DB: it was
-**working as designed**, only the *first* registered account was admin (a 2nd
-throwaway registration got `user`). The concern is still valid for a *public* URL
-("first to register wins admin" is a land-grab), so admin assignment was pinned:
-- New env **`ADMIN_EMAIL=admin@example.com`** on the website. Only that email
- auto-becomes admin on registration; everyone else is `user`; no first-come race.
- (Empty `ADMIN_EMAIL` falls back to "first account = admin" for local dev / tests.)
-- Reconciled existing rows: promoted `admin@example.com` to `admin`, demoted the
- earlier (different-email) admin to `user`, so the pinned email is the sole admin.
+### 3.10 Admin assignment is manual (database only)
+There is no auto-admin: every registration gets the `user` role. Admin is granted
+explicitly in the database, which avoids any "first to register wins admin" land-grab
+on a public URL and keeps the sign-up path simple:
+```sh
+docker exec natforge-postgres psql -U natforge -d natforge \
+  -c "UPDATE users SET role='admin' WHERE email='you@example.com';"
+```
 
 Note: the pin only sets roles at *registration*, pre-existing rows must be
 reconciled by hand (one `UPDATE`), which is why `admin@example.com` (registered

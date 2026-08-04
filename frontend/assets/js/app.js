@@ -8,6 +8,7 @@ const NF_ICONS = {
     logout: '<svg viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><line x1="5" y1="12" x2="16" y2="12"/></svg>',
     plus: '<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
     close: '<svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
+    chevron: '<svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>',
     stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>',
     link: '<svg viewBox="0 0 24 24"><path d="M14 5h5v5"/><line x1="19" y1="5" x2="10" y2="14"/><path d="M19 13v5a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 18V6.5A1.5 1.5 0 0 1 6.5 5H11"/></svg>',
     device: '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/><line x1="10" y1="3" x2="10" y2="6"/><line x1="14" y1="3" x2="14" y2="6"/><line x1="10" y1="18" x2="10" y2="21"/><line x1="14" y1="18" x2="14" y2="21"/><line x1="3" y1="10" x2="6" y2="10"/><line x1="3" y1="14" x2="6" y2="14"/><line x1="18" y1="10" x2="21" y2="10"/><line x1="18" y1="14" x2="21" y2="14"/></svg>',
@@ -36,14 +37,17 @@ function nfIcon(name) { return `<span class="icon" data-icon-done="1">${NF_ICONS
 
 // ---- Auth guards ----
 function requireAuth(adminOnly = false) {
-    if (!window.API || !window.API.isAuthed()) { window.location.href = 'index.html'; return false; }
-    if (adminOnly && window.API.role !== 'admin') { toast('Administrator role required', 'danger'); setTimeout(() => location.href = 'dashboard.html', 1200); return false; }
+    if (!window.API || !window.API.isAuthed()) { window.location.href = '/signin'; return false; }
+    if (adminOnly && window.API.role !== 'admin') { toast('Administrator role required', 'danger'); setTimeout(() => location.href = '/dashboard', 1200); return false; }
     return true;
 }
-function logout() { window.API.clearSession(); window.location.href = 'index.html'; }
+function logout() { window.API.clearSession(); window.location.href = '/signin'; }
 function applyRoleVisibility() {
-    if (window.API && window.API.role !== 'admin')
+    if (!window.API) return;
+    if (window.API.role !== 'admin')
         document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
+    else
+        document.querySelectorAll('.user-only').forEach(el => el.style.display = 'none');
 }
 
 function fmtBytes(n) {
@@ -162,7 +166,7 @@ function nfPrompt({ title = 'Edit', message = '', fields = [], confirmText = 'Sa
         const fieldHtml = fields.map(f =>
             `<div class="field">
                <label class="lbl">${escapeHtml(f.label || f.key)}${f.hint ? ` <span class="faint small">${escapeHtml(f.hint)}</span>` : ''}</label>
-               <input class="input nf-field">
+               ${f.type === 'select' ? '<select class="input nf-field"></select>' : '<input class="input nf-field">'}
              </div>`).join('');
         overlay.innerHTML =
             `<div class="modal" style="max-width:460px">
@@ -177,15 +181,24 @@ function nfPrompt({ title = 'Edit', message = '', fields = [], confirmText = 'Sa
                  </div>
                </div>
              </div>`;
-        const els = Array.from(overlay.querySelectorAll('input.nf-field'));
+        const els = Array.from(overlay.querySelectorAll('.nf-field'));
         els.forEach((inp, i) => {
             const f = fields[i];
+            inp.dataset.key = f.key;
+            if (f.type === 'select') {
+                (f.options || []).forEach(o => {
+                    const opt = document.createElement('option');
+                    opt.value = o.value; opt.textContent = o.label;
+                    inp.appendChild(opt);
+                });
+                if (f.value != null) inp.value = String(f.value);
+                return;
+            }
             inp.type = f.type || 'text';
             inp.value = f.value == null ? '' : String(f.value);
             if (f.placeholder) inp.placeholder = f.placeholder;
             if (f.maxlength) inp.maxLength = parseInt(f.maxlength, 10);
             if (f.pattern) inp.pattern = f.pattern;
-            inp.dataset.key = f.key;
         });
         const collect = () => { const o = {}; els.forEach(i => o[i.dataset.key] = i.value); return o; };
         const done = v => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
@@ -197,7 +210,7 @@ function nfPrompt({ title = 'Edit', message = '', fields = [], confirmText = 'Sa
         });
         document.addEventListener('keydown', onKey);
         document.body.appendChild(overlay);
-        if (els[0]) { els[0].focus(); els[0].select(); }
+        if (els[0]) { els[0].focus(); if (els[0].tagName === 'INPUT') els[0].select(); }
     });
 }
 

@@ -52,14 +52,27 @@ class NatForgeAPI {
     login(email, password)    { return this._req('POST', '/auth/login', { email, password }); }
     approveDevice(userCode)   { return this._req('POST', '/auth/device', { user_code: userCode }); }
 
+    // --- Devices (persistent enrolled agents) ---
+    getDevices()                        { return this._req('GET', '/devices'); }
+    // Create a device by name (pending, no agent yet); returns { device_id, name }.
+    createDevice(name)                  { return this._req('POST', '/devices', { name: name || null }); }
+    // Bind the code the agent printed to a new device (name) or an existing one (deviceId).
+    approveDeviceEnroll(userCode, name, deviceId) { return this._req('POST', '/devices/enroll/approve', { user_code: userCode, name: name || null, device_id: deviceId || null }); }
+    renameDevice(id, name)              { return this._req('PATCH', `/devices/${encodeURIComponent(id)}`, { name }); }
+    deleteDevice(id)                    { return this._req('DELETE', `/devices/${encodeURIComponent(id)}`); }
+
     // --- Service-host tunnels ---
     getTunnels()          { return this._req('GET', '/tunnels'); }
-    // routes: [{ mode, local_port, label? }, ...]; subdomain + nodeId optional
-    requestTunnel(routes, subdomain, nodeId) {
+    // routes: [{ mode, local_port, label? }, ...]; subdomain, nodeId, deviceId optional.
+    // createNew=true makes an existing identical route set a conflict (409) instead of
+    // silently reusing it (the dashboard "new service host" flow).
+    requestTunnel(routes, subdomain, nodeId, deviceId, createNew) {
         return this._req('POST', '/tunnels/request', {
             routes,
             subdomain: subdomain || null,
             node_id: nodeId || null,
+            device_id: deviceId || null,
+            create_new: !!createNew,
         });
     }
     stopTunnel(tunnelId)  { return this._req('POST', `/tunnels/${encodeURIComponent(tunnelId)}/stop`); }
@@ -67,6 +80,8 @@ class NatForgeAPI {
     renameTunnel(tunnelId, name) { return this._req('PATCH', `/tunnels/${encodeURIComponent(tunnelId)}`, { name: name || null }); }
     // Full edit: { subdomain?, name?, route_labels?: [{route_id, label}] }.
     editTunnel(tunnelId, body)   { return this._req('PATCH', `/tunnels/${encodeURIComponent(tunnelId)}`, body); }
+    // Reconcile a service's exposed ports in place. routes: [{ mode, local_port, label? }].
+    setServiceRoutes(tunnelId, routes) { return this._req('PUT', `/tunnels/${encodeURIComponent(tunnelId)}/routes`, { routes }); }
     getRegions()          { return this._req('GET', '/regions'); }
     getTunnelBandwidth(id){ return this._req('GET', `/tunnels/${encodeURIComponent(id)}/bandwidth`); }
     getTunnelLogs(id)     { return this._req('GET', `/tunnels/${encodeURIComponent(id)}/logs`); }
@@ -90,9 +105,6 @@ class NatForgeAPI {
     getRegionBlocks()         { return this._req('GET', '/admin/region_blocks'); }
     addRegionBlock(cc)        { return this._req('POST', '/admin/region_blocks', { country_code: cc }); }
     removeRegionBlock(cc)     { return this._req('DELETE', `/admin/region_blocks/${cc}`); }
-    getPortBlocks()           { return this._req('GET', '/admin/port_blocks'); }
-    addPortBlock(port)        { return this._req('POST', '/admin/port_blocks', { port }); }
-    removePortBlock(port)     { return this._req('DELETE', `/admin/port_blocks/${port}`); }
     // --- Admin: nodes / regions ---
     getNodes()                { return this._req('GET', '/admin/nodes'); }
     updateNode(id, body)      { return this._req('PATCH', `/admin/nodes/${encodeURIComponent(id)}`, body); }

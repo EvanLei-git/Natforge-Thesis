@@ -6,7 +6,7 @@ use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
 
 use crate::db::connection::SharedState;
-use crate::handlers::{admin, auth, internal, tunnels, user};
+use crate::handlers::{admin, auth, devices, internal, tunnels, user};
 
 pub fn api_router(state: SharedState) -> Router {
     Router::new()
@@ -16,12 +16,29 @@ pub fn api_router(state: SharedState) -> Router {
         .route("/api/auth/device/start", post(auth::device_start))
         .route("/api/auth/device/token", post(auth::device_token))
         .route("/api/auth/device", post(auth::device_approve))
+        // --- Devices (persistent enrolled agents) ---
+        .route("/api/devices/enroll/start", post(devices::enroll_start))
+        .route("/api/devices/enroll/token", post(devices::enroll_token))
+        .route("/api/devices/enroll/approve", post(devices::enroll_approve))
+        .route("/api/devices/me/config", get(tunnels::device_config))
+        .route(
+            "/api/devices",
+            get(devices::list_devices).post(devices::create_device),
+        )
+        .route(
+            "/api/devices/{id}",
+            patch(devices::rename_device).delete(devices::delete_device),
+        )
         // --- Service-host tunnels ---
         .route("/api/tunnels", get(tunnels::get_tunnels))
         .route("/api/tunnels/request", post(tunnels::request_tunnel))
         .route(
             "/api/tunnels/{tunnel_id}",
             delete(tunnels::delete_tunnel).patch(tunnels::edit_tunnel),
+        )
+        .route(
+            "/api/tunnels/{tunnel_id}/routes",
+            put(tunnels::set_service_routes),
         )
         .route("/api/tunnels/{tunnel_id}/stop", post(tunnels::stop_tunnel))
         .route(
@@ -56,14 +73,6 @@ pub fn api_router(state: SharedState) -> Router {
         .route(
             "/api/admin/region_blocks/{country_code}",
             delete(admin::remove_region_block),
-        )
-        .route(
-            "/api/admin/port_blocks",
-            get(admin::get_port_blocks).post(admin::add_port_block),
-        )
-        .route(
-            "/api/admin/port_blocks/{port}",
-            delete(admin::remove_port_block),
         )
         .route("/api/admin/stats", get(admin::network_stats))
         .route("/api/admin/tunnels", get(admin::all_tunnels))

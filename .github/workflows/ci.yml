@@ -1,8 +1,17 @@
 name: CI
 
+# Rust checks (fmt, clippy, tests, build, e2e). Scoped to changes that can affect the
+# Rust code or the e2e harness, so a frontend- or docs-only push doesn't run them.
 on:
   push:
     branches: [main]
+    paths:
+      - '**.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'website_backend/migrations/**'
+      - 'scripts/e2e.sh'
+      - '.github/workflows/ci.yml'
   pull_request:
 
 concurrency:

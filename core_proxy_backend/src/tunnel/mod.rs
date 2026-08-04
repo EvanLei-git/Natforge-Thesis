@@ -145,15 +145,7 @@ where
     let custom_domain = claims.custom_domain.clone();
     let cfg = &state.config;
 
-    // 2. Policy + ownership pre-checks (reject before committing anything).
-    for r in &claims.routes {
-        if let Some(port) = r.public_port
-            && state.blocked_ports.read().await.contains(&port)
-        {
-            reject(&mut socket, format!("port {port} is globally blocked")).await?;
-            anyhow::bail!("blocked port {port}");
-        }
-    }
+    // 2. Ownership pre-checks (reject before committing anything).
     {
         // Don't let a stale/leaked token for a different tunnel hijack a live host.
         let http = state.http_routes.read().await;
@@ -206,6 +198,13 @@ where
                     }
                 }
                 format!("{}:{}", cfg.public_host, port)
+            }
+            // The control plane expands `both` into a tcp claim + a udp claim before
+            // minting the token, so a raw `Both` never reaches the data plane; reject
+            // it cleanly rather than binding nothing.
+            RouteMode::Both => {
+                reject(&mut socket, "unexpected 'both' route in token".into()).await?;
+                anyhow::bail!("unexpected Both route reached the data plane");
             }
         };
         planned.push(PlannedRoute {
@@ -320,6 +319,9 @@ where
                     listener_handles.push(jh);
                 }
             }
+            // Unreachable: `both` is expanded into tcp+udp claims upstream (rejected in
+            // the bind pass above), so no PlannedRoute is ever Both.
+            RouteMode::Both => {}
         }
         // Per-tunnel DNS only for tcp routes: provision an SRV so players can use
         // <sub>.<domain> instead of host:port. http/https are covered by the wildcard
@@ -483,9 +485,6 @@ async fn tcp_listener_loop(state: Arc<CoreState>, listener: TcpListener, handle:
             Ok(v) => v,
             Err(_) => continue,
         };
-        if !state.ddos.analyze_connection(&peer.ip().to_string()).await {
-            continue;
-        }
         let h = handle.clone();
         let st = state.clone();
         tokio::spawn(async move {
@@ -606,9 +605,6 @@ async fn udp_listener_loop(state: Arc<CoreState>, socket: UdpSocket, handle: Rou
                     continue;
                 }
                 let peer_ip = peer.ip().to_string();
-                if !state.ddos.analyze_connection(&peer_ip).await {
-                    continue;
-                }
                 let country = state.geo.country(peer.ip());
                 if state
                     .is_country_blocked(handle.tunnel_id, country.as_deref())

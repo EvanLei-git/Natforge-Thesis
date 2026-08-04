@@ -77,7 +77,7 @@ impl AppState {
 // are naturally short-lived and a perfect fit for Redis key TTLs.
 // --------------------------------------------------------------------------
 
-pub const DEVCODE_TTL_SECS: i64 = 1800; // 30 minutes
+pub const DEVCODE_TTL_SECS: i64 = 3600; // 1 hour
 
 fn devcode_user_key(user_code: &str) -> String {
     format!("nf:devcode:{user_code}")
@@ -90,6 +90,25 @@ fn devcode_index_key(device_code: &str) -> String {
 pub struct DeviceRecord {
     pub device_code: String,
     pub approved_user: Option<i32>,
+    /// Set only for a *device enrollment* (the `devices.id` created on approval).
+    pub device_id: Option<i64>,
+}
+
+/// Fixed-window rate limit: increment `key`, giving it a `window_secs` TTL on the first
+/// hit of each window. Returns true while at or under `limit`, false once over. Used to
+/// bound online guessing of the short device pairing code.
+pub async fn rate_limit_hit(
+    redis: &ConnectionManager,
+    key: &str,
+    limit: i64,
+    window_secs: i64,
+) -> anyhow::Result<bool> {
+    let mut conn = redis.clone();
+    let n: i64 = conn.incr(key, 1i64).await?;
+    if n == 1 {
+        let _: () = conn.expire(key, window_secs).await?;
+    }
+    Ok(n <= limit)
 }
 
 /// Store a fresh device/user code pair (both expire together after the TTL).
@@ -101,7 +120,14 @@ pub async fn devcode_create(
     let mut conn = redis.clone();
     let uk = devcode_user_key(user_code);
     let _: () = conn
-        .hset_multiple(&uk, &[("device_code", device_code), ("approved_user", "")])
+        .hset_multiple(
+            &uk,
+            &[
+                ("device_code", device_code),
+                ("approved_user", ""),
+                ("device_id", ""),
+            ],
+        )
         .await
         .context("redis devcode hset")?;
     let _: () = conn.expire(&uk, DEVCODE_TTL_SECS).await?;
@@ -132,6 +158,33 @@ pub async fn devcode_approve(
     Ok(true)
 }
 
+/// Approve a user code as a *device enrollment*: record the approving user AND the
+/// `devices.id` created for it, so the enroll poll can mint a device token. Returns
+/// false if the code does not exist (expired or never issued).
+pub async fn devcode_approve_device(
+    redis: &ConnectionManager,
+    user_code: &str,
+    uid: i32,
+    device_id: i64,
+) -> anyhow::Result<bool> {
+    let mut conn = redis.clone();
+    let uk = devcode_user_key(user_code);
+    let exists: bool = conn.exists(&uk).await?;
+    if !exists {
+        return Ok(false);
+    }
+    let _: () = conn
+        .hset_multiple(
+            &uk,
+            &[
+                ("approved_user", uid.to_string()),
+                ("device_id", device_id.to_string()),
+            ],
+        )
+        .await?;
+    Ok(true)
+}
+
 /// Resolve a device code to its approval state. `None` => unknown/expired.
 pub async fn devcode_status(
     redis: &ConnectionManager,
@@ -143,9 +196,10 @@ pub async fn devcode_status(
         return Ok(None);
     };
     let uk = devcode_user_key(&user_code);
-    let fields: Option<(String, String)> =
-        conn.hget(&uk, &["device_code", "approved_user"]).await?;
-    let Some((stored_device, approved)) = fields else {
+    let fields: Option<(String, String, Option<String>)> = conn
+        .hget(&uk, &["device_code", "approved_user", "device_id"])
+        .await?;
+    let Some((stored_device, approved, device_id_s)) = fields else {
         return Ok(None);
     };
     if stored_device != device_code {
@@ -156,9 +210,13 @@ pub async fn devcode_status(
     } else {
         approved.parse::<i32>().ok()
     };
+    let device_id = device_id_s
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<i64>().ok());
     Ok(Some(DeviceRecord {
         device_code: stored_device,
         approved_user,
+        device_id,
     }))
 }
 

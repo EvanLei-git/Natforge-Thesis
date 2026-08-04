@@ -84,7 +84,13 @@ CF_API_TOKEN=<cloudflare token, or leave 'mock_token' to disable SRV>
 CF_ZONE_ID=<cloudflare zone id, or 'mock_zone'>
 ```
 
-> **Adding a second region:** deploy another core on a new VM with a distinct `NODE_ID`, a `PUBLIC_HOST` like `bg.natforge.com` (whose `*.bg.natforge.com` wildcard points at that VM), and the matching `CONTROL_ENDPOINT`/`INTERNAL_URL`. It self-registers; enable it in the admin panel and it appears in every user's region dropdown.
+**Adding a second region (one command).** On a new VM that runs *only* the core:
+```bash
+sudo ./install.sh --component core --dedicated \
+  --node-id us-1 --public-host us.natforge.com --head-host <head-ip> \
+  --jwt-secret <same-as-head> --internal-secret <same-as-head>
+```
+This widens the pool to `10000–60999`, applies the kernel/firewall tuning (`scripts/dedicated-node.sh`, §6), points `WEBSITE_URL`/`REDIS_URL` at the head, and enables + starts the service (omit any flag to be prompted; secrets are hidden). The node keeps no database of its own. Give its `PUBLIC_HOST` a grey `*.us.natforge.com` wildcard pointing at the VM, ensure the head's `:3000` (control-plane API) and `:6379` (Redis) are reachable from the node (private network recommended) and the node's `:3001` from the head, then enable it in the admin panel and it appears in every user's region dropdown.
 
 **Your users' agents** (`natforge` on their machines) point at your control plane; the node to connect to comes from the reservation, so no `--tunnel-server` is needed:
 ```bash
@@ -114,7 +120,7 @@ After delegating `natforge.com` to Cloudflare (set the two nameservers Cloudflar
 | A | `app.natforge.com` | `<VM public IP>` | Proxied (recommended for the dashboard, see §7) |
 
 - The **wildcard is the whole DNS story for tunnels**: every `duck-xxxx.natforge.com` already resolves; the core routes by Host/SNI. There is no per-subdomain record and no limit.
-- **Keep the wildcard grey (DNS-only)**: Cloudflare's orange-cloud proxy terminates TLS (breaks SNI passthrough) and won't carry the raw TCP pool (`20000–20100`) without paid **Spectrum**.
+- **Keep the wildcard grey (DNS-only)**: Cloudflare's orange-cloud proxy terminates TLS (breaks SNI passthrough) and won't carry the raw TCP/UDP pool (`20000–20100` by default) without paid **Spectrum**.
 - Per-tunnel `_minecraft._tcp.<sub>` **SRV** records are created/removed automatically by the core when `CF_API_TOKEN`/`CF_ZONE_ID` are set (so players type just `<sub>.natforge.com`). Without them, players use `<sub>.natforge.com:<port>`.
 
 Full rationale: `Thesis.md` Appendix D.
@@ -127,10 +133,12 @@ Full rationale: `Thesis.md` Appendix D.
 |---|---|---|
 | `80`, `443` | **Yes** | core shared HTTP / HTTPS-SNI routers |
 | `4000` | **Yes** | agent control plane (yamux) |
-| `20000–20100` | **Yes** | dedicated TCP route pool |
+| `20000–20100` (default) | **Yes** | dedicated TCP/UDP route pool (per node; widened on a dedicated node, below) |
 | `3000` | No (localhost / behind reverse proxy) | dashboard + API |
-| `3001` | **No** (localhost only) | core internal API (secret-guarded, but keep private) |
+| `3001` | **No** on the head (localhost); on a remote node, reachable only from the control plane | core internal API (secret-guarded) |
 | `5432`, `6379` | No (localhost only) | PostgreSQL / Redis |
+
+> **Dedicated (relay-only) node:** a VM that runs *only* the core has far fewer occupied ports, so it can host a much larger pool. `sudo ./install.sh --component core --dedicated` (or `sudo bash scripts/dedicated-node.sh`) widens the pool to **`10000–60999`** and narrows the kernel's outbound ephemeral range to `61000–65535`; then open `tcp/udp 10000–60999` on the host firewall **and** the cloud NSG, and keep `:3001` reachable only from the control-plane host. Rationale and the full recipe are in `Thesis.md` §3.3.6.
 
 ---
 
@@ -142,22 +150,22 @@ The core's `:443` router does **SNI passthrough** (it never decrypts), so it **c
 - **Self-managed TLS:** run a one-line **Caddy** (or nginx) reverse proxy that terminates TLS for `app.natforge.com` → `127.0.0.1:3000`. Caddy auto-obtains Let's Encrypt certs.
 - **Single-IP advanced:** front everything with a proxy on `:443` that terminates TLS for the dashboard host and TCP-passes tunnel hosts to the core by SNI. Only needed if you refuse a separate dashboard subdomain.
 
-For **unencrypted-origin HTTP tunnels** (a user exposing plain HTTP), if you want NatForge itself to add TLS *at the public edge* you would terminate at the core with a `*.natforge.com` wildcard cert (Let's Encrypt DNS-01 via the Cloudflare API). Today HTTPS routes rely on the origin's own TLS via passthrough. Note this is separate from the **agent↔core** leg, which is always TLS-encrypted (self-signed, fingerprint-pinned) regardless of the inner protocol.
+For **unencrypted-origin HTTP tunnels** (a user exposing plain HTTP), NatForge can add TLS *at the public edge* itself: `http` subdomain routes are terminated at the core with a `*.natforge.com` wildcard cert (`WILDCARD_CERT_PATH`, certbot DNS-01), and user **custom domains** get a per-domain Let's Encrypt cert automatically over ACME HTTP-01 (`ACME_ENABLED=1`). `https` routes stay pure SNI passthrough (the relay never decrypts; the origin's own cert is served). All of this is separate from the **agent↔core** leg, which is always TLS-encrypted (self-signed, fingerprint-pinned) regardless of the inner protocol.
 
 ---
 
 ## 8. Feature status, what works, what needs config, what is NOT implemented
 
-**Works out of the box:** the reverse tunnel (HTTP-by-subdomain, HTTPS-by-SNI, raw TCP), multiple routes per tunnel, the **multi-region** data plane (self-registering nodes, per-tunnel region choice), **per-tunnel observability** (bandwidth series + connection log), the **TLS-encrypted, fingerprint-pinned** agent↔core channel, Argon2+JWT auth, RFC 8628 device flow, the dashboards, **port blocking**, the userspace connection-rate guard, and full PostgreSQL+Redis persistence with idempotent reservation.
+**Works out of the box:** the reverse tunnel (HTTP-by-subdomain, HTTPS-by-SNI, **raw TCP, and raw UDP**), multiple routes per tunnel, **user-owned custom domains** (a tunnel can be fronted by `play.mygame.com` alongside its `<sub>.natforge.com`), **cross-region migration** (move a live tunnel to another region from the dashboard), the **multi-region** data plane (self-registering nodes, per-tunnel region choice), **per-tunnel observability** (bandwidth series + connection log), the **TLS-encrypted, fingerprint-pinned** agent↔core channel, Argon2+JWT auth, RFC 8628 device flow, the dashboards, and full PostgreSQL+Redis persistence with idempotent reservation.
 
-**Works once you add the key/file:**
-- Cloudflare **SRV** game-address provisioning (`CF_API_TOKEN` + `CF_ZONE_ID`).
-- **Geo-blocking** (platform-wide + per-tunnel): set `GEOIP_DB` to a MaxMind `GeoLite2-Country.mmdb` on the website **and** each node. The enforcement logic is fully implemented (login/registration gating on the website; public-connection drops on the nodes), it only needs the database. Without it, country resolution returns "unknown" and blocking is a no-op (it never blocks blindly).
+**Works once you enable it / add the key or file:**
+- **Automatic HTTPS for custom domains** (`ACME_ENABLED=1`, on in the production compose): the core obtains a per-domain Let's Encrypt certificate over ACME HTTP-01 on `:80`, so a user's `play.mygame.com` gets edge TLS with no cert management. A custom domain can alternatively bring its own cert via SNI passthrough.
+- **Automatic HTTPS for `http` subdomain routes** via a `*.natforge.com` **wildcard** cert: set `WILDCARD_CERT_PATH`/`WILDCARD_KEY_PATH` (certbot DNS-01). Absent the file the core serves those routes over plain HTTP (graceful-off).
+- Cloudflare **SRV** game-address provisioning (`CF_API_TOKEN` + `CF_ZONE_ID`): lets Minecraft-Java players type just `<sub>.natforge.com`. Without it, players use `<sub>.natforge.com:<port>`.
+- **Geo-blocking** (platform-wide + per-tunnel): set `GEOIP_DB` to a MaxMind `GeoLite2-Country.mmdb` on the website **and** each node. Enforcement is fully implemented (login/registration gating on the website; public-connection drops on the nodes); it only needs the database. Without it, country resolution returns "unknown" and blocking is a no-op (it never blocks blindly).
 
 **NOT implemented, do not rely on these:**
-- **eBPF/XDP kernel DDoS drop**, the connection-rate guard runs in userspace only (a kernel drop path is a production enhancement).
-- **Direct UDP hole punching (P2P)**, future work; today every tunnel relays through a regional node.
-- **Cross-region live migration**, you can place a *new* tunnel in any region, but moving a live tunnel between regions is not implemented.
+- **Direct UDP hole punching (P2P)**: future work; today every tunnel relays through a regional node. This is distinct from **UDP tunneling**, which *is* implemented, UDP datagrams are relayed over the node exactly like TCP.
 
 ---
 

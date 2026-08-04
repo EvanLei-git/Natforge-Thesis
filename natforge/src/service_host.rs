@@ -6,7 +6,7 @@
 //! preamble to learn which route the stream belongs to, dials the matching local
 //! port, replays any peeked bytes, and copies bidirectionally - all in memory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,6 +15,7 @@ use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
 use tokio::net::{TcpStream, UdpSocket};
+use tokio::task::JoinHandle;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{error, info, warn};
 use yamux::{Config as YamuxConfig, Connection, Mode};
@@ -170,6 +171,98 @@ pub async fn run(
             Err(e) => warn!("re-reserve failed ({e}); retrying with the existing reservation"),
         }
     }
+}
+
+/// Run mode for an enrolled device: pull the device's services from the control
+/// plane (config-driven, no `--route` flags) and serve **all** of them at once.
+///
+/// The device is a supervisor: it maintains one serve task per service (keyed by
+/// tunnel id), each holding its own control connection to its node. On a short poll
+/// it re-fetches the config and reconciles: services newly added get a task, removed
+/// services have theirs aborted, and a task whose session has ended is respawned with
+/// a fresh reservation. Because a live route edit drops the session on the node, that
+/// service's task ends and is respawned with the new port set within a poll cycle, so
+/// dashboard edits take effect with no CLI. Serving several services from one machine
+/// over a *single* shared control connection is a further optimisation; here each
+/// service rides its own connection, which the core already handles.
+pub async fn run_device(
+    control_plane: &str,
+    device_token: &str,
+    tunnel_server: Option<&str>,
+) -> Result<()> {
+    let mut tasks: HashMap<i64, JoinHandle<()>> = HashMap::new();
+    let mut was_empty = false;
+    loop {
+        let services = match fetch_config(control_plane, device_token).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("config fetch failed ({e}); retrying in 5s…");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+        let want: HashSet<i64> = services.iter().map(|r| r.tunnel_id).collect();
+
+        // Stop tasks for services that were removed; drop finished tasks so the spawn
+        // pass below respawns them with the freshly fetched reservation.
+        tasks.retain(|tid, h| {
+            if !want.contains(tid) {
+                h.abort();
+                info!("service {tid} removed; stopped serving it");
+                false
+            } else {
+                !h.is_finished()
+            }
+        });
+
+        // Spawn a serve task for every service that does not already have a live one.
+        for reservation in services {
+            if tasks.contains_key(&reservation.tunnel_id) {
+                continue;
+            }
+            let target = tunnel_server
+                .unwrap_or(reservation.control_endpoint.as_str())
+                .to_string();
+            info!(
+                "serving '{}' ({}) with {} route(s)",
+                reservation.subdomain,
+                reservation.full_host,
+                reservation.routes.len()
+            );
+            let tid = reservation.tunnel_id;
+            let handle = tokio::spawn(async move {
+                if let Err(e) = connect_and_serve(&target, &reservation).await {
+                    warn!("service '{}' error: {e}", reservation.subdomain);
+                }
+            });
+            tasks.insert(tid, handle);
+        }
+
+        if want.is_empty() {
+            if !was_empty {
+                info!("device has no services yet; add one from the dashboard.");
+            }
+            was_empty = true;
+        } else {
+            was_empty = false;
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+}
+
+async fn fetch_config(control_plane: &str, device_token: &str) -> Result<Vec<Reservation>> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{control_plane}/api/devices/me/config"))
+        .bearer_auth(device_token)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let msg = resp.text().await.unwrap_or_default();
+        return Err(anyhow!("config fetch failed: {code} {msg}"));
+    }
+    Ok(resp.json().await?)
 }
 
 async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Result<()> {

@@ -23,7 +23,6 @@ use yamux::{ConnectionError, Stream};
 use tokio_rustls::TlsAcceptor;
 
 use crate::config::Config;
-use crate::ddos::DdosProtector;
 use crate::geo::GeoDb;
 use natforge_proto::RouteMode;
 
@@ -83,8 +82,6 @@ pub struct CoreState {
     pub custom_http: RwLock<HashMap<String, RouteHandle>>, // key = full custom hostname
     pub custom_https: RwLock<HashMap<String, RouteHandle>>, // key = full custom hostname
     pub redis: redis::aio::ConnectionManager,
-    pub ddos: DdosProtector,
-    pub blocked_ports: RwLock<Vec<u16>>,
     /// Admin-wide blocked countries (ISO alpha-2), refreshed from website policy.
     pub blocked_regions: RwLock<Vec<String>>,
     /// Per-tunnel user-chosen blocked countries: tunnel_id -> [CC, ...].
@@ -127,8 +124,6 @@ impl CoreState {
             custom_http: RwLock::new(HashMap::new()),
             custom_https: RwLock::new(HashMap::new()),
             redis,
-            ddos: DdosProtector::default(),
-            blocked_ports: RwLock::new(vec![25, 465, 587]),
             blocked_regions: RwLock::new(Vec::new()),
             tunnel_region_blocks: RwLock::new(HashMap::new()),
             geo,
@@ -145,7 +140,7 @@ impl CoreState {
         match mode {
             RouteMode::Http => self.http_routes.read().await.get(subdomain).cloned(),
             RouteMode::Https => self.https_routes.read().await.get(subdomain).cloned(),
-            RouteMode::Tcp | RouteMode::Udp => None,
+            RouteMode::Tcp | RouteMode::Udp | RouteMode::Both => None,
         }
     }
 
@@ -154,7 +149,7 @@ impl CoreState {
         match mode {
             RouteMode::Http => self.custom_http.read().await.get(host).cloned(),
             RouteMode::Https => self.custom_https.read().await.get(host).cloned(),
-            RouteMode::Tcp | RouteMode::Udp => None,
+            RouteMode::Tcp | RouteMode::Udp | RouteMode::Both => None,
         }
     }
 

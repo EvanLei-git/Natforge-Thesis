@@ -5,9 +5,16 @@ name: Agent release
 #   - gnu:  dynamically linked against glibc (modern Linux).
 #   - musl: fully static, no libc dependency -> runs on ANY x86_64 Linux distro.
 
+# Only rebuild + publish the agent when the agent itself (or the shared wire crate it
+# links) changes - a backend/frontend/docs push doesn't touch the released binary.
 on:
   push:
     branches: [main]
+    paths:
+      - 'natforge/**'
+      - 'natforge-proto/**'
+      - 'Cargo.lock'
+      - '.github/workflows/agent-release.yml'
   workflow_dispatch:
 
 permissions:
@@ -73,8 +80,8 @@ jobs:
           body: |
             Rolling build of the NatForge agent (`natforge`) from `main`.
 
-            - **`natforge-x86_64-linux-gnu`** — dynamically linked against glibc; runs on modern Linux (glibc >= the build host's).
-            - **`natforge-x86_64-linux-musl`** — fully **static** (musl libc baked in, zero dynamic dependencies); runs on **any** x86_64 Linux distro, old or new, including Alpine.
+            - **`natforge-x86_64-linux-gnu`** - dynamically linked against glibc; runs on modern Linux (glibc >= the build host's).
+            - **`natforge-x86_64-linux-musl`** - fully **static** (musl libc baked in, zero dynamic dependencies); runs on **any** x86_64 Linux distro, old or new, including Alpine.
 
             Install (static build, works anywhere):
             ```sh

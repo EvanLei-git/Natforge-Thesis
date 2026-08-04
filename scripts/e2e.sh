@@ -50,7 +50,7 @@ start_planes() {
     WILDCARD_CERT_PATH=/tmp/nf_wild_c.pem WILDCARD_KEY_PATH=/tmp/nf_wild_k.pem \
     ./target/debug/core_proxy_backend >/tmp/nf_core.log 2>&1 & PIDS+=($!)
   for i in $(seq 1 60); do
-    [ "$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3000/ 2>/dev/null)" = "303" ] && \
+    [ "$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3000/ 2>/dev/null)" = "200" ] && \
     [ "$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3001/health 2>/dev/null)" = "200" ] && return 0
     sleep 0.4
   done
@@ -62,6 +62,10 @@ start_planes
 echo "### 3. register + reserve a 3-route tunnel + launch agent"
 TOK=$(curl -s 127.0.0.1:3000/api/auth/register -H 'content-type: application/json' \
   -d '{"email":"evan@natforge.com","password":"hunter2pass"}' | jq -r '.token//empty')
+# Admin is DB-assigned (no auto-admin); promote this account so the admin-panel checks
+# below pass. The token refreshes to the admin role on the re-login later in the suite.
+docker exec natforge-postgres psql -U natforge -d natforge \
+  -c "UPDATE users SET role='admin' WHERE email='evan@natforge.com';" >/dev/null 2>&1
 RSV=$(curl -s 127.0.0.1:3000/api/tunnels/request -H "authorization: Bearer $TOK" -H 'content-type: application/json' \
   -d '{"routes":[{"mode":"http","local_port":8000},{"mode":"https","local_port":9443},{"mode":"tcp","local_port":25565},{"mode":"udp","local_port":25566}]}')
 SUB=$(echo "$RSV"|jq -r .subdomain); TID=$(echo "$RSV"|jq -r .tunnel_id)
@@ -171,7 +175,7 @@ BCODE=$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3000/api/auth/login \
 # device-authorization flow: 30-min TTL + single-use
 DS=$(curl -s -X POST 127.0.0.1:3000/api/auth/device/start)
 DC=$(echo "$DS" | jq -r .device_code); UCODE=$(echo "$DS" | jq -r .user_code)
-[ "$(echo "$DS" | jq -r .expires_in)" = "1800" ] && ok "device code TTL is 30 min (1800s)" || bad "device TTL (got $(echo "$DS"|jq -r .expires_in))"
+[ "$(echo "$DS" | jq -r .expires_in)" = "3600" ] && ok "device code TTL is 1 hour (3600s)" || bad "device TTL (got $(echo "$DS"|jq -r .expires_in))"
 curl -s -X POST 127.0.0.1:3000/api/auth/device -H "authorization: Bearer $TOK" -H 'content-type: application/json' -d "{\"user_code\":\"$UCODE\"}" >/dev/null
 ST1=$(curl -s -X POST 127.0.0.1:3000/api/auth/device/token -H 'content-type: application/json' -d "{\"device_code\":\"$DC\"}" | jq -r .status)
 [ "$ST1" = "approved" ] && ok "device code approved -> session token issued" || bad "device approve/token (got $ST1)"

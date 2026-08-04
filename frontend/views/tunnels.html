@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NatForge - Tunnels</title>
+    <link rel="icon" href="/assets/img/natforge_flake.ico">
+    <link href="/assets/css/style.css" rel="stylesheet">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="brand">
+                <img src="/assets/img/natforge_flake.png" alt="">
+                <span class="name">NatForge</span>
+            </div>
+            <nav class="nav">
+                <a href="/admin/network" class="nav-link"><span data-icon="admin"></span> Network</a>
+                <a href="/admin/users" class="nav-link"><span data-icon="users"></span> Users</a>
+                <a href="/admin/tunnels" class="nav-link active"><span data-icon="activity"></span> Tunnels</a>
+            </nav>
+            <div class="nav-spacer"></div>
+            <a href="/admin/profile" class="nav-link"><span data-icon="user"></span> Profile</a>
+            <a href="#" onclick="logout()" class="nav-link danger"><span data-icon="logout"></span> Sign out</a>
+        </aside>
+
+        <main class="content">
+            <h2 class="page-title">Tunnels</h2>
+            <p class="page-sub">Every tunnel on the network: its owner, the region hosting it, the public port it exposes, and the local port each route forwards to.</p>
+
+            <div class="stat-grid" id="tunnelStats"></div>
+
+            <div class="card">
+                <div class="card-head"><h5>All tunnels</h5></div>
+                <div class="card-body flush">
+                    <table class="table">
+                        <thead><tr>
+                            <th>Tunnel</th><th>User</th><th>Region</th><th>Status</th>
+                            <th>Public</th><th>Local routes</th><th>Traffic</th>
+                        </tr></thead>
+                        <tbody id="allTunnels"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/client.js"></script>
+    <script src="/assets/js/app.js"></script>
+    <script>
+        if (requireAuth(true)) { refresh(); setInterval(refresh, 5000); }
+
+        async function refresh() {
+            try {
+                const list = await API.getAllTunnels();
+                renderStats(list);
+                renderTunnels(list);
+            } catch (err) { toast(err.message, 'danger'); }
+        }
+
+        function stat(label, value, cls, ic) {
+            return `<div class="stat ${cls || ''}"><div class="flex between"><div class="label">${label}</div>${nfIcon(ic)}</div><div class="value">${value}</div></div>`;
+        }
+        function renderStats(list) {
+            const active = list.filter(t => t.status === 'online').length;
+            let din = 0, dout = 0;
+            list.forEach(t => { din += t.bytes_in; dout += t.bytes_out; });
+            document.getElementById('tunnelStats').innerHTML =
+                stat('Active tunnels', active, 'green', 'service') +
+                stat('Traffic in', fmtBytes(din), '', 'download') +
+                stat('Traffic out', fmtBytes(dout), '', 'upload') +
+                stat('Total traffic', fmtBytes(din + dout), '', 'activity');
+        }
+
+        // The public port a route exposes: the dedicated port for tcp/udp/both, or the
+        // shared 80/443 that host-routed http/https ride on the wildcard subdomain.
+        function publicPort(r) {
+            if (r.public_port != null) return r.public_port;
+            if (r.mode === 'https') return 443;
+            if (r.mode === 'http') return 80;
+            return null;
+        }
+        function publicBadges(t) {
+            return t.routes.map(r => {
+                const p = publicPort(r);
+                return `<span class="badge ${r.mode}">${r.mode}${p != null ? ':' + p : ''}</span>`;
+            }).join(' ');
+        }
+        function localBadges(t) {
+            return t.routes.map(r => `<span class="badge ${r.mode}">${r.mode}:${r.local_port}</span>`).join(' ');
+        }
+        function ownerLabel(t) {
+            const n = (t.owner_name || '').trim();
+            return escapeHtml(n || t.owner_email || ('#' + t.owner_id));
+        }
+
+        function renderTunnels(list) {
+            document.getElementById('allTunnels').innerHTML = list.length ? list.map(t =>
+                `<tr>
+                    <td><div class="host">${escapeHtml(t.full_host)}</div><div class="faint small">#${t.tunnel_id} &middot; agent ${escapeHtml(t.agent_ip || '-')}</div></td>
+                    <td>${ownerLabel(t)}</td>
+                    <td>${t.region ? `<span class="badge tag">${escapeHtml(t.region)}</span>` : '<span class="faint small">-</span>'}</td>
+                    <td><span class="badge ${t.status}">${t.status.replace('_', ' ')}</span></td>
+                    <td>${publicBadges(t)}</td>
+                    <td>${localBadges(t)}</td>
+                    <td class="faint small">${fmtBytes(t.bytes_in)} / ${fmtBytes(t.bytes_out)}</td>
+                </tr>`
+            ).join('') : '<tr><td colspan="7" class="empty">No tunnels yet</td></tr>';
+        }
+    </script>
+</body>
+</html>

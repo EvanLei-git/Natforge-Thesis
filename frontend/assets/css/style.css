@@ -98,12 +98,15 @@ code, pre { font-family: var(--mono); }
 .brand-head .tag { color: var(--text-faint); font-size: 13px; margin-top: 2px; }
 
 /* ==========================  App shell  ============================= */
-.app { display: flex; min-height: 100vh; }
+/* The shell fills the viewport; the sidebar stays fixed on screen at any size and
+   the content pane is the scrollable region. */
+.app { display: flex; height: 100vh; overflow: hidden; }
 
 .sidebar {
     width: 248px; flex-shrink: 0;
     background: var(--bg-app); border-right: 1px solid var(--border);
     display: flex; flex-direction: column; padding: 16px 12px;
+    height: 100vh; overflow-y: auto;
 }
 .sidebar .brand { display: flex; align-items: center; gap: 10px; padding: 6px 8px 16px; }
 .sidebar .brand img { width: 30px; height: 30px; }
@@ -126,7 +129,52 @@ code, pre { font-family: var(--mono); }
 .nav-link.danger { color: var(--text-faint); }
 .nav-link.danger:hover { background: rgba(224,72,77,.12); color: var(--red); }
 
-.content { flex: 1; min-width: 0; padding: 28px 32px; max-width: 1100px; }
+/* --- Sidebar device -> service-host tree --- */
+.tree-add-device { width: 100%; justify-content: center; margin: 2px 0 10px; }
+.tree { display: flex; flex-direction: column; gap: 1px; margin-bottom: 8px; }
+.tree-empty { color: var(--text-faint); font-size: 12.5px; line-height: 1.6; padding: 6px 10px; margin: 0; }
+.tree-row {
+    display: flex; align-items: center; gap: 7px;
+    padding: 7px 9px; border-radius: var(--radius-sm);
+    cursor: pointer; color: var(--text-muted); font-size: 13.5px;
+    border-left: 2px solid transparent; user-select: none;
+}
+.tree-row:hover { background: var(--bg-hover); color: var(--text); }
+.tree-device-row { font-weight: 600; }
+.tree-chev { display: inline-flex; color: var(--text-faint); transform: rotate(-90deg); transition: transform .15s ease; flex-shrink: 0; }
+.tree-chev.open { transform: rotate(0deg); }
+.tree-chev svg { width: 14px; height: 14px; }
+.tree-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-badge { flex-shrink: 0; font-size: 10px; padding: 1px 7px; }
+.tree-actions { display: none; gap: 2px; flex-shrink: 0; }
+.tree-row:hover .tree-actions { display: inline-flex; }
+.tree-ico {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; border: 0; padding: 2px; border-radius: 5px;
+    color: var(--text-faint); cursor: pointer;
+}
+.tree-ico:hover { background: var(--bg-raised); color: var(--text); }
+.tree-ico.danger:hover { color: var(--red); }
+.tree-ico svg { width: 14px; height: 14px; }
+.tree-children { margin-left: 14px; padding-left: 8px; border-left: 1px solid var(--border); }
+.tree-device-row.active { background: var(--brand-tint-2); color: var(--text); border-left-color: var(--brand-strong); }
+.tree-service { padding: 6px 9px; font-weight: 500; }
+.tree-service.active { background: var(--brand-tint); color: var(--brand-bright); border-left-color: var(--brand); }
+/* Device page: each service host is its own card + a scroll-spy target */
+.svc-section { scroll-margin-top: 14px; }
+.table-wrap { overflow-x: auto; }
+.tree-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-faint); }
+.tree-dot.online { background: var(--green); }
+.tree-dot.offline, .tree-dot.awaiting_agent, .tree-dot.stopped, .tree-dot.pending { background: var(--text-faint); }
+.tree-add-svc {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 9px; border-radius: var(--radius-sm);
+    color: var(--text-faint); font-size: 12.5px; cursor: pointer;
+}
+.tree-add-svc:hover { background: var(--bg-hover); color: var(--brand-bright); }
+.tree-add-svc svg { width: 13px; height: 13px; }
+
+.content { flex: 1; min-width: 0; min-height: 0; padding: 28px 32px; height: 100vh; overflow-y: auto; }
 .page-title { margin-bottom: 4px; }
 .page-sub { color: var(--text-muted); margin-bottom: 22px; max-width: 70ch; }
 
@@ -142,6 +190,16 @@ code, pre { font-family: var(--mono); }
 .card-head h5 { margin: 0; }
 .card-body { padding: 18px; }
 .card-body.flush { padding: 0; }
+
+/* Collapsible card: a <details class="card collapsible"> with a rotating chevron. */
+details.collapsible > summary {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; cursor: pointer; padding: 14px 18px; list-style: none;
+}
+details.collapsible > summary::-webkit-details-marker { display: none; }
+details.collapsible > summary h5 { margin: 0; }
+details.collapsible > summary .chev { color: var(--text-muted); transition: transform .18s ease; }
+details.collapsible[open] > summary .chev { transform: rotate(180deg); }
 
 /* stat cards */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; margin-bottom: 24px; }
@@ -241,6 +299,7 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
 .badge.https { color: #9d8bff; background: rgba(157,139,255,.16); text-transform: uppercase; }
 .badge.tcp   { color: var(--amber); background: rgba(232,161,58,.14); text-transform: uppercase; }
 .badge.udp   { color: #4fd1c5; background: rgba(79,209,197,.14); text-transform: uppercase; }
+.badge.both  { color: #7bd88f; background: rgba(123,216,143,.15); text-transform: uppercase; }
 .badge.tag   { color: var(--text-muted); background: var(--bg-raised); text-transform: none; }
 
 .kbd, .endpoint { font-family: var(--mono); font-size: 12.5px; background: var(--bg-sunken); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 2px 7px; color: var(--text); }

@@ -8,8 +8,8 @@ use serde_json::json;
 
 use crate::db::connection::SharedState;
 use crate::db::queries::{self, ReserveError};
-use crate::jwt::{AuthUser, issue_tunnel_token};
-use crate::models::{RequestedRoute, TunnelView};
+use crate::jwt::{AuthUser, DeviceAuth, issue_tunnel_token};
+use crate::models::{Node, RequestedRoute, RouteRow, TunnelRow, TunnelView};
 use natforge_proto::{RouteClaim, RouteMode};
 
 #[derive(Deserialize)]
@@ -21,6 +21,14 @@ pub struct RequestTunnelReq {
     /// Optional node/region to host the tunnel on; the default node is used if omitted.
     #[serde(default)]
     pub node_id: Option<String>,
+    /// Optional device to attach this tunnel to as a service (must be caller-owned).
+    #[serde(default)]
+    pub device_id: Option<i64>,
+    /// When true, an existing tunnel with the same route set is a conflict rather than
+    /// being reused. The dashboard "create a new service host" flow sets this; a
+    /// reconnecting CLI agent leaves it false so it keeps its subdomain and ports.
+    #[serde(default)]
+    pub create_new: bool,
 }
 
 #[derive(Serialize)]
@@ -55,18 +63,132 @@ fn parse_kind(kind: &str) -> RouteMode {
         "http" => RouteMode::Http,
         "https" => RouteMode::Https,
         "udp" => RouteMode::Udp,
+        "both" => RouteMode::Both,
         _ => RouteMode::Tcp,
     }
+}
+
+/// Per-tunnel route policy shared by fresh reservation and in-place route edits:
+/// at most 1 http, 1 https, 2 tcp and 2 udp (a `both` route counts as one tcp AND one
+/// udp), and each dedicated (non-host-routed) local port may be used by at most one
+/// route, so exposing the same port over TCP and UDP must be a single `both` route
+/// rather than two.
+fn check_route_policy(routes: &[RequestedRoute]) -> Result<(), String> {
+    let (mut http, mut https, mut tcp, mut udp) = (0, 0, 0, 0);
+    let mut dedicated_ports: Vec<u16> = Vec::with_capacity(routes.len());
+    for r in routes {
+        if !r.mode.is_host_routed() {
+            if dedicated_ports.contains(&r.local_port) {
+                return Err(format!(
+                    "local port {} is used by more than one route; pick Both to expose one port over TCP and UDP",
+                    r.local_port
+                ));
+            }
+            dedicated_ports.push(r.local_port);
+        }
+        match r.mode {
+            RouteMode::Http => http += 1,
+            RouteMode::Https => https += 1,
+            RouteMode::Tcp => tcp += 1,
+            RouteMode::Udp => udp += 1,
+            RouteMode::Both => {
+                tcp += 1;
+                udp += 1;
+            }
+        }
+    }
+    if http > 1 || https > 1 || tcp > 2 || udp > 2 {
+        return Err("at most 1 http, 1 https, 2 tcp and 2 udp routes per service".into());
+    }
+    Ok(())
 }
 
 fn endpoint(mode: RouteMode, subdomain: &str, domain: &str, public_port: Option<i32>) -> String {
     match mode {
         RouteMode::Http => format!("http://{subdomain}.{domain}"),
         RouteMode::Https => format!("https://{subdomain}.{domain}"),
-        RouteMode::Tcp | RouteMode::Udp => {
+        RouteMode::Tcp | RouteMode::Udp | RouteMode::Both => {
             format!("{subdomain}.{domain}:{}", public_port.unwrap_or(0))
         }
     }
+}
+
+/// route_id offset for the udp half of a `both` route on the wire, kept well above the
+/// small dense route ids so the two halves of one `both` never collide.
+const BOTH_UDP_ROUTE_OFFSET: u16 = 10000;
+
+/// The transports a route occupies on its local port, as a bitset (bit0 = tcp, bit1 =
+/// udp). `both` occupies both; http/https are host-routed and hold no dedicated port.
+/// Two routes on the same local port clash iff their transport sets intersect, so
+/// tcp:N and udp:N coexist but tcp:N and both:N do not.
+fn transport_bits(kind: &str) -> u8 {
+    match kind {
+        "tcp" => 0b01,
+        "udp" => 0b10,
+        "both" => 0b11,
+        _ => 0,
+    }
+}
+
+/// Expand a persisted route into the wire claims + agent views. A `both` route becomes
+/// a tcp half (route_id R) and a udp half (route_id R + offset) sharing the one public
+/// port, so the data plane binds a TCP listener and a UDP socket on that number and the
+/// agent relays each half like an ordinary tcp/udp route. Every other mode yields a
+/// single entry. This is the only place the one-row `both` abstraction is unfolded.
+fn expand_route(
+    r: &RouteRow,
+    subdomain: &str,
+    host: &str,
+) -> (Vec<RouteClaim>, Vec<ReservedRoute>) {
+    if parse_kind(&r.kind) == RouteMode::Both {
+        let port_u16 = r.public_port.map(|p| p as u16);
+        let ep = endpoint(RouteMode::Tcp, subdomain, host, r.public_port);
+        let tcp_id = r.route_id as u16;
+        let udp_id = tcp_id.wrapping_add(BOTH_UDP_ROUTE_OFFSET);
+        let claim = |route_id, mode| RouteClaim {
+            route_id,
+            mode,
+            host: None,
+            public_port: port_u16,
+        };
+        let view = |route_id, mode: &str| ReservedRoute {
+            route_id,
+            mode: mode.to_string(),
+            local_port: r.local_port as u16,
+            public_endpoint: ep.clone(),
+            label: r.label.clone(),
+        };
+        return (
+            vec![claim(tcp_id, RouteMode::Tcp), claim(udp_id, RouteMode::Udp)],
+            vec![view(tcp_id, "tcp"), view(udp_id, "udp")],
+        );
+    }
+    let mode = parse_kind(&r.kind);
+    let route_host = if mode.is_host_routed() {
+        Some(format!("{subdomain}.{host}"))
+    } else {
+        None
+    };
+    let public_port = if mode.is_host_routed() {
+        None
+    } else {
+        r.public_port.map(|p| p as u16)
+    };
+    (
+        vec![RouteClaim {
+            route_id: r.route_id as u16,
+            mode,
+            host: route_host,
+            public_port,
+        }],
+        vec![ReservedRoute {
+            route_id: r.route_id as u16,
+            mode: r.kind.clone(),
+            local_port: r.local_port as u16,
+            public_endpoint: endpoint(mode, subdomain, host, r.public_port),
+            label: r.label.clone(),
+        }],
+    )
 }
 
 pub async fn request_tunnel(
@@ -86,33 +208,8 @@ pub async fn request_tunnel(
             "at least one route is required".into(),
         ));
     }
-    // Per-tunnel route policy: <= 1 http, <= 1 https, <= 2 tcp, <= 2 udp.
-    let (mut http, mut https, mut tcp, mut udp) = (0, 0, 0, 0);
-    for r in &req.routes {
-        match r.mode {
-            RouteMode::Http => http += 1,
-            RouteMode::Https => https += 1,
-            RouteMode::Tcp => tcp += 1,
-            RouteMode::Udp => udp += 1,
-        }
-    }
-    if http > 1 || https > 1 || tcp > 2 || udp > 2 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "at most 1 http, 1 https, 2 tcp and 2 udp routes per tunnel".into(),
-        ));
-    }
-    // Reject globally blocked local ports up front.
-    for r in &req.routes {
-        if queries::is_port_blocked(&state.db.pg, r.local_port)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        {
-            return Err((
-                StatusCode::FORBIDDEN,
-                format!("local port {} is globally blocked", r.local_port),
-            ));
-        }
+    if let Err(e) = check_route_policy(&req.routes) {
+        return Err((StatusCode::BAD_REQUEST, e));
     }
 
     let requested: Vec<(RouteMode, u16, Option<String>)> = req
@@ -146,6 +243,41 @@ pub async fn request_tunnel(
             ))?,
     };
 
+    // If attaching to a device, it must be caller-owned, and none of the requested
+    // (protocol, local port) endpoints may already be served by the device's OTHER
+    // services (tcp:N and udp:N are distinct, so only exact protocol+port clashes).
+    if let Some(did) = req.device_id {
+        let owns = queries::device_by_id(&state.db.pg, did)
+            .await
+            .map_err(db_err)?
+            .map(|d| d.owner_id)
+            == Some(user.user_id);
+        if !owns {
+            return Err((StatusCode::FORBIDDEN, "not your device".into()));
+        }
+        let taken = queries::device_routes_excluding(&state.db.pg, did, 0)
+            .await
+            .map_err(db_err)?;
+        if let Some(r) = req.routes.iter().find(|r| {
+            taken.iter().any(|(k, p)| {
+                *p == r.local_port as i32
+                    && transport_bits(k) & transport_bits(r.mode.as_str()) != 0
+            })
+        }) {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "{}:{} is already used by another service on this device",
+                    r.mode.as_str(),
+                    r.local_port
+                ),
+            ));
+        }
+    }
+
+    let max_tunnels = queries::user_max_tunnels(&state.db.pg, user.user_id)
+        .await
+        .map_err(db_err)?;
     let reserved = queries::reserve_tunnel(
         &state.db.pg,
         user.user_id,
@@ -153,7 +285,9 @@ pub async fn request_tunnel(
         &node.public_host,
         &requested,
         custom,
-        2, // max tunnels per user
+        max_tunnels, // per-user cap (users.max_tunnels)
+        !req.create_new,
+        req.device_id,
     )
     .await
     .map_err(|e| match e {
@@ -164,7 +298,6 @@ pub async fn request_tunnel(
             StatusCode::SERVICE_UNAVAILABLE,
             "public TCP port pool exhausted".into(),
         ),
-        ReserveError::BlockedPort(p) => (StatusCode::FORBIDDEN, format!("port {p} is blocked")),
         ReserveError::BadSubdomain => (
             StatusCode::BAD_REQUEST,
             "invalid subdomain: use 3–30 chars of a–z, 0–9 and '-'".into(),
@@ -172,6 +305,10 @@ pub async fn request_tunnel(
         ReserveError::SubdomainTaken(s) => (
             StatusCode::CONFLICT,
             format!("subdomain '{s}' is already taken"),
+        ),
+        ReserveError::RouteSetExists(sub) => (
+            StatusCode::CONFLICT,
+            format!("a service host already exposes those exact ports ({sub})"),
         ),
         ReserveError::Db(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -187,34 +324,14 @@ pub async fn request_tunnel(
         .unwrap_or(node);
     let host = &reserved.public_host;
 
-    // Build token claims + the response view from the persisted routes.
-    let mut claims = Vec::with_capacity(reserved.routes.len());
-    let mut views = Vec::with_capacity(reserved.routes.len());
+    // Build token claims + the response view from the persisted routes (a `both` route
+    // unfolds into its tcp + udp halves here).
+    let mut claims = Vec::new();
+    let mut views = Vec::new();
     for r in &reserved.routes {
-        let mode = parse_kind(&r.kind);
-        let route_host = if mode.is_host_routed() {
-            Some(format!("{}.{}", reserved.subdomain, host))
-        } else {
-            None
-        };
-        let public_port = if mode.is_host_routed() {
-            None
-        } else {
-            r.public_port.map(|p| p as u16)
-        };
-        claims.push(RouteClaim {
-            route_id: r.route_id as u16,
-            mode,
-            host: route_host,
-            public_port,
-        });
-        views.push(ReservedRoute {
-            route_id: r.route_id as u16,
-            mode: r.kind.clone(),
-            local_port: r.local_port as u16,
-            public_endpoint: endpoint(mode, &reserved.subdomain, host, r.public_port),
-            label: r.label.clone(),
-        });
+        let (c, v) = expand_route(r, &reserved.subdomain, host);
+        claims.extend(c);
+        views.extend(v);
     }
 
     let token = issue_tunnel_token(
@@ -253,6 +370,75 @@ pub async fn request_tunnel(
         control_cert_fingerprint: host_node.control_cert_fp,
         custom_domain: reserved.custom_domain,
     }))
+}
+
+/// Build the connect-ready reservation the agent understands (a fresh tunnel token,
+/// the node's control endpoint + pinned cert, and the routes) from a persisted tunnel.
+fn build_reservation(
+    secret: &str,
+    owner_id: i32,
+    t: &TunnelRow,
+    routes: &[RouteRow],
+    node: &Node,
+) -> TunnelRequestRes {
+    let host = &t.public_host;
+    let mut claims = Vec::new();
+    let mut views = Vec::new();
+    for r in routes {
+        let (c, v) = expand_route(r, &t.subdomain, host);
+        claims.extend(c);
+        views.extend(v);
+    }
+    let token = issue_tunnel_token(secret, owner_id, t.id, &t.subdomain, claims, None);
+    TunnelRequestRes {
+        full_host: format!("{}.{}", t.subdomain, host),
+        tunnel_id: t.id,
+        subdomain: t.subdomain.clone(),
+        tunnel_token: token,
+        routes: views,
+        status: "reserved".into(),
+        control_endpoint: node.control_endpoint.clone(),
+        region: node.region.clone(),
+        node_id: node.node_id.clone(),
+        control_cert_fingerprint: node.control_cert_fp.clone(),
+        custom_domain: None,
+    }
+}
+
+/// A device agent (device-token authed) pulls the connect-ready reservations for all
+/// of its services here. This is what makes `natforge run` config-driven instead of
+/// `--route`-flag driven.
+pub async fn device_config(
+    State(state): State<SharedState>,
+    dev: DeviceAuth,
+) -> Result<Json<Vec<TunnelRequestRes>>, (StatusCode, String)> {
+    let db_err = |e: anyhow::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    let tunnels = queries::device_service_tunnels(&state.db.pg, dev.device_id)
+        .await
+        .map_err(db_err)?;
+    let mut out = Vec::with_capacity(tunnels.len());
+    for t in &tunnels {
+        let Some(node_id) = t.node_id.as_deref() else {
+            continue;
+        };
+        let Some(node) = queries::get_node(&state.db.pg, node_id)
+            .await
+            .map_err(db_err)?
+        else {
+            continue;
+        };
+        let routes = queries::routes_for_tunnel(&state.db.pg, t.id)
+            .await
+            .map_err(db_err)?;
+        out.push(build_reservation(
+            &state.config.jwt_secret,
+            dev.owner_id,
+            t,
+            &routes,
+            &node,
+        ));
+    }
+    Ok(Json(out))
 }
 
 pub async fn get_tunnels(
@@ -741,5 +927,109 @@ pub async fn edit_tunnel(
         "status": "tunnel_updated",
         "tunnel_id": tunnel_id,
         "subdomain_changed": subdomain_changed,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct SetRoutesReq {
+    pub routes: Vec<RequestedRoute>,
+}
+
+/// PUT /api/tunnels/{id}/routes - reconcile a service's exposed ports (owner or admin)
+/// WITHOUT tearing the tunnel down. Add a port, drop a port, or change the set: kept
+/// ports keep their public address, new tcp/udp ports get a fresh pooled port, dropped
+/// ports free theirs. This is how the dashboard grows a service in place instead of
+/// forcing a brand-new tunnel. On a live tunnel the node's session is dropped so the
+/// running agent re-pulls its config and serves the new set (~3s), no CLI needed.
+pub async fn set_service_routes(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(tunnel_id): Path<i64>,
+    Json(req): Json<SetRoutesReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (subdomain, node_id) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
+    let Some(node_id) = node_id else {
+        return Err((
+            StatusCode::CONFLICT,
+            "this tunnel has no host node yet".into(),
+        ));
+    };
+    if req.routes.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "a service must keep at least one route".into(),
+        ));
+    }
+    // Same per-tunnel policy as a fresh reservation: <=1 http, <=1 https, <=2 tcp, <=2 udp.
+    if let Err(e) = check_route_policy(&req.routes) {
+        return Err((StatusCode::BAD_REQUEST, e));
+    }
+    // Per-device port uniqueness, keyed by (protocol, local port): two services on one
+    // device must not both claim the same local endpoint. tcp:N and udp:N do NOT clash
+    // (distinct local sockets); tcp:N twice, or udp:N twice, do.
+    if let Some(device_id) = queries::tunnel_device_id(&state.db.pg, tunnel_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    {
+        let taken = queries::device_routes_excluding(&state.db.pg, device_id, tunnel_id)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(r) = req.routes.iter().find(|r| {
+            taken.iter().any(|(k, p)| {
+                *p == r.local_port as i32
+                    && transport_bits(k) & transport_bits(r.mode.as_str()) != 0
+            })
+        }) {
+            return Err((
+                StatusCode::CONFLICT,
+                format!(
+                    "{}:{} is already used by another service on this device",
+                    r.mode.as_str(),
+                    r.local_port
+                ),
+            ));
+        }
+    }
+
+    let requested: Vec<(RouteMode, u16, Option<String>)> = req
+        .routes
+        .iter()
+        .map(|r| (r.mode, r.local_port, r.label.clone()))
+        .collect();
+    let routes = queries::set_service_routes(&state.db.pg, tunnel_id, &node_id, &requested)
+        .await
+        .map_err(|e| match e {
+            ReserveError::PortExhausted => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the region's public port pool is full".into(),
+            ),
+            ReserveError::RouteSetExists(_) => (
+                StatusCode::CONFLICT,
+                "you already have a service with those exact ports".into(),
+            ),
+            ReserveError::Db(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("database error: {err}"),
+            ),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "route update failed".into(),
+            ),
+        })?;
+
+    // Live tunnel: drop the session so the running agent re-pulls and serves the new set.
+    if queries::tunnel_status(&state.db.pg, tunnel_id)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("online")
+    {
+        signal_node_stop(&state, &subdomain, &Some(node_id)).await;
+    }
+    Ok(Json(json!({
+        "status": "routes_updated",
+        "tunnel_id": tunnel_id,
+        "route_count": routes.len(),
     })))
 }

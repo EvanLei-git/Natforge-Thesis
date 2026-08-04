@@ -19,11 +19,12 @@ use std::time::Duration;
 use axum::Router;
 use axum::http::HeaderValue;
 use axum::http::header::CACHE_CONTROL;
-use axum::response::Redirect;
+use axum::http::{StatusCode, Uri};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::serve;
 use tower_http::cors::CorsLayer;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
@@ -32,6 +33,33 @@ use crate::db::connection::AppState;
 
 /// Tunnels silent longer than this are reclaimed (ports freed, row deleted).
 const RECONCILE_GRACE_SECS: i64 = 3600;
+
+/// Serve a clean, extensionless page URL from the views directory: "/" maps to the
+/// landing page and "/<name>" to `views/<name>.html`. The name is restricted to
+/// `[A-Za-z0-9_-]`, so a request can never traverse out of the views directory.
+async fn serve_page(views_dir: &str, uri: &Uri) -> Response {
+    let raw = uri.path().trim_matches('/');
+    // The admin section lives under /admin/* but the views are flat files; map the
+    // nested URLs onto them (the plain /admin, /users, /profile still work too).
+    let name = match raw {
+        "" => "landing",
+        "admin/network" => "admin",
+        "admin/users" => "users",
+        "admin/tunnels" => "tunnels",
+        "admin/profile" => "profile",
+        other => other,
+    };
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match tokio::fs::read_to_string(format!("{views_dir}/{name}.html")).await {
+        Ok(html) => Html(html).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -90,15 +118,29 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let api = routes::api_router(state.clone());
-    let serve_dir = ServeDir::new(&config.frontend_dir);
+    let views_dir = format!("{}/views", config.frontend_dir);
     let app = Router::new()
-        .route("/", get(|| async { Redirect::to("/views/landing.html") }))
-        .route(
-            "/device",
-            get(|| async { Redirect::to("/views/index.html") }),
-        )
         .merge(api)
-        .fallback_service(serve_dir)
+        // Static assets and the API client sit at fixed, absolute paths.
+        .nest_service(
+            "/assets",
+            ServeDir::new(format!("{}/assets", config.frontend_dir)),
+        )
+        .route_service(
+            "/client.js",
+            ServeFile::new(format!("{}/api/client.js", config.frontend_dir)),
+        )
+        // The device-flow entry point sends the user to the sign-in page.
+        .route("/device", get(|| async { Redirect::to("/signin") }))
+        // Clean, extensionless page URLs: "/" -> landing, "/<name>" -> views/<name>.html.
+        // One handler covers every current and future page, with no per-page route.
+        .fallback({
+            let views = views_dir.clone();
+            move |uri: Uri| {
+                let views = views.clone();
+                async move { serve_page(&views, &uri).await }
+            }
+        })
         // Always revalidate static assets so a redesign never gets stuck behind a
         // stale browser cache (no rebuild is needed for frontend changes either).
         .layer(SetResponseHeaderLayer::overriding(

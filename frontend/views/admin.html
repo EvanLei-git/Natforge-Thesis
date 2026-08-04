@@ -4,29 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NatForge - Admin</title>
-    <link rel="icon" href="../assets/img/natforge_flake.ico">
-    <link href="../assets/css/style.css" rel="stylesheet">
+    <link rel="icon" href="/assets/img/natforge_flake.ico">
+    <link href="/assets/css/style.css" rel="stylesheet">
 </head>
 <body>
     <div class="app">
         <aside class="sidebar">
             <div class="brand">
-                <img src="../assets/img/natforge_flake.png" alt="">
+                <img src="/assets/img/natforge_flake.png" alt="">
                 <span class="name">NatForge</span>
             </div>
             <nav class="nav">
-                <a href="dashboard.html" class="nav-link"><span data-icon="service"></span> Service Host</a>
-                <a href="admin.html" class="nav-link active"><span data-icon="admin"></span> Admin</a>
-                <a href="users.html" class="nav-link"><span data-icon="users"></span> Users</a>
-                <a href="profile.html" class="nav-link"><span data-icon="user"></span> Profile</a>
+                <a href="/admin/network" class="nav-link active"><span data-icon="admin"></span> Network</a>
+                <a href="/admin/users" class="nav-link"><span data-icon="users"></span> Users</a>
+                <a href="/admin/tunnels" class="nav-link"><span data-icon="activity"></span> Tunnels</a>
             </nav>
             <div class="nav-spacer"></div>
+            <a href="/admin/profile" class="nav-link"><span data-icon="user"></span> Profile</a>
             <a href="#" onclick="logout()" class="nav-link danger"><span data-icon="logout"></span> Sign out</a>
         </aside>
 
         <main class="content">
             <h2 class="page-title">Network administration</h2>
-            <p class="page-sub">Monitor the network and enforce abuse controls. Blocked ports and regions are applied by the control plane and propagated to the data plane.</p>
+            <p class="page-sub">Monitor the network and enforce abuse controls. Blocked regions are applied by the control plane and propagated to the data plane.</p>
 
             <div class="stat-grid" id="statCards"></div>
 
@@ -63,54 +63,31 @@
                 </div>
             </div>
 
-            <div class="card">
-                <div class="card-head"><h5>Globally blocked ports</h5></div>
-                <div class="card-body">
-                    <p class="muted small">Prevent tunneling of abused ports (e.g. SMTP 25 / 465 / 587) across the network.</p>
-                    <div class="flex gap" id="portList" style="flex-wrap:wrap"></div>
-                    <form class="row-inline mt" id="portForm" style="max-width:320px">
-                        <input type="number" min="1" max="65535" id="portInput" class="input" placeholder="Port number" required>
-                        <button type="submit" class="btn btn-secondary"><span data-icon="plus"></span> Add</button>
-                    </form>
-                </div>
-            </div>
-
-            <div class="card">
-                <div class="card-head"><h5>All active tunnels</h5></div>
-                <div class="card-body flush">
-                    <table class="table">
-                        <thead><tr><th>Tunnel</th><th>Status</th><th>Routes</th><th>Traffic</th></tr></thead>
-                        <tbody id="allTunnels"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
         </main>
     </div>
 
-    <script src="../api/client.js"></script>
-    <script src="../assets/js/app.js"></script>
+    <script src="/client.js"></script>
+    <script src="/assets/js/app.js"></script>
     <script>
         if (requireAuth(true)) { refresh(); setInterval(refresh, 5000); }
 
         async function refresh() {
             try {
-                const [stats, regions, ports, tunnels, nodes] = await Promise.all([
-                    API.getStats(), API.getRegionBlocks(), API.getPortBlocks(), API.getAllTunnels(), API.getNodes()
+                const [stats, regions, nodes] = await Promise.all([
+                    API.getStats(), API.getRegionBlocks(), API.getNodes()
                 ]);
-                renderStats(stats); renderRegions(regions); renderPorts(ports); renderTunnels(tunnels); renderNodes(nodes);
+                renderStats(stats, nodes); renderRegions(regions); renderNodes(nodes);
             } catch (err) { toast(err.message, 'danger'); }
         }
 
         function stat(label, value, cls, ic) {
             return `<div class="stat ${cls || ''}"><div class="flex between"><div class="label">${label}</div>${nfIcon(ic)}</div><div class="value">${value}</div></div>`;
         }
-        function renderStats(s) {
+        function renderStats(s, nodes) {
+            const activeNodes = (nodes || []).filter(n => n.active).length;
             document.getElementById('statCards').innerHTML =
-                stat('Users', s.total_users, '', 'users') +
-                stat('Active tunnels', s.active_tunnels, 'green', 'service') +
-                stat('Traffic', fmtBytes(s.total_bytes_relayed), '', 'activity') +
                 stat('Regions blocked', s.blocked_regions, 'red', 'globe') +
-                stat('Ports blocked', s.blocked_ports, '', 'ban');
+                stat('Active nodes', activeNodes, 'green', 'server');
         }
         function renderRegions(list) {
             document.getElementById('regionList').innerHTML = list.length ? list.map(cc =>
@@ -119,22 +96,6 @@
                     <button class="btn btn-danger btn-sm" onclick="unblockRegion('${cc}')">Unban</button></div>`
             ).join('') : '<div class="faint small">None</div>';
         }
-        function renderPorts(list) {
-            document.getElementById('portList').innerHTML = list.length ? list.map(p =>
-                `<span class="badge tag" style="font-size:13px; padding:6px 10px">Port ${p}
-                    <button class="x-btn" style="padding:0 0 0 4px" onclick="unblockPort(${p})">${nfIcon('close')}</button></span>`
-            ).join('') : '<span class="faint small">None</span>';
-        }
-        function routeBadges(t) { return t.routes.map(r => `<span class="badge ${r.mode}">${r.mode}:${r.local_port}</span>`).join(' '); }
-        function renderTunnels(list) {
-            document.getElementById('allTunnels').innerHTML = list.length ? list.map(t =>
-                `<tr><td><div class="host">${t.full_host}</div><div class="faint small">#${t.tunnel_id} &middot; agent ${t.agent_ip || '-'}</div></td>
-                 <td><span class="badge ${t.status}">${t.status.replace('_',' ')}</span></td>
-                 <td>${routeBadges(t)}</td>
-                 <td class="faint small">${fmtBytes(t.bytes_in)} / ${fmtBytes(t.bytes_out)}</td></tr>`
-            ).join('') : '<tr><td colspan="4" class="empty">No active tunnels</td></tr>';
-        }
-
         function renderNodes(list) {
             document.getElementById('nodeRows').innerHTML = list.length ? list.map(n => {
                 const seen = n.last_seen ? fmtAgo(n.last_seen) : '<span class="faint small">never</span>';
@@ -174,16 +135,10 @@
         }
 
         async function unblockRegion(cc) { try { await API.removeRegionBlock(cc); refresh(); } catch (e) { toast(e.message, 'danger'); } }
-        async function unblockPort(p)   { try { await API.removePortBlock(p); refresh(); } catch (e) { toast(e.message, 'danger'); } }
 
         document.getElementById('regionForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             try { await API.addRegionBlock(document.getElementById('regionSelect').value); refresh(); }
-            catch (err) { toast(err.message, 'danger'); }
-        });
-        document.getElementById('portForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            try { await API.addPortBlock(parseInt(document.getElementById('portInput').value, 10)); e.target.reset(); refresh(); }
             catch (err) { toast(err.message, 'danger'); }
         });
     </script>

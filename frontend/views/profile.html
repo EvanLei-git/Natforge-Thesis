@@ -4,23 +4,25 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NatForge - Profile</title>
-    <link rel="icon" href="../assets/img/natforge_flake.ico">
-    <link href="../assets/css/style.css" rel="stylesheet">
+    <link rel="icon" href="/assets/img/natforge_flake.ico">
+    <link href="/assets/css/style.css" rel="stylesheet">
 </head>
 <body>
     <div class="app">
         <aside class="sidebar">
             <div class="brand">
-                <img src="../assets/img/natforge_flake.png" alt="">
+                <img src="/assets/img/natforge_flake.png" alt="">
                 <span class="name">NatForge</span>
             </div>
             <nav class="nav">
-                <a href="dashboard.html" class="nav-link"><span data-icon="service"></span> Service Host</a>
-                <a href="admin.html" class="nav-link admin-only"><span data-icon="admin"></span> Admin</a>
-                <a href="users.html" class="nav-link admin-only"><span data-icon="users"></span> Users</a>
-                <a href="profile.html" class="nav-link active"><span data-icon="user"></span> Profile</a>
+                <a href="/dashboard?add=device" class="btn btn-primary btn-sm tree-add-device user-only"><span data-icon="plus"></span> Add device</a>
+                <div id="deviceTree" class="tree user-only"><p class="tree-empty">Loading&hellip;</p></div>
+                <a href="/admin/network" class="nav-link admin-only"><span data-icon="admin"></span> Network</a>
+                <a href="/admin/users" class="nav-link admin-only"><span data-icon="users"></span> Users</a>
+                <a href="/admin/tunnels" class="nav-link admin-only"><span data-icon="activity"></span> Tunnels</a>
             </nav>
             <div class="nav-spacer"></div>
+            <a href="/profile" class="nav-link active"><span data-icon="user"></span> Profile</a>
             <a href="#" onclick="logout()" class="nav-link danger"><span data-icon="logout"></span> Sign out</a>
         </aside>
 
@@ -64,8 +66,9 @@
         </main>
     </div>
 
-    <script src="../api/client.js"></script>
-    <script src="../assets/js/app.js"></script>
+    <script src="/client.js"></script>
+    <script src="/assets/js/app.js"></script>
+    <script src="/assets/js/sidebar-nav.js"></script>
     <script>
         if (requireAuth()) { loadProfile(); }
 

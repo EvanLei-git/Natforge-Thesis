@@ -137,7 +137,7 @@ pub async fn report_conn_log(
     .await;
 }
 
-/// Refresh policy from the website: globally blocked ports + countries, and the
+/// Refresh policy from the website: admin-wide blocked countries, and the
 /// per-tunnel country block lists set by tunnel owners.
 pub async fn refresh_policy(state: &Arc<CoreState>) {
     let url = format!("{}/api/internal/policy", state.config.website_url);
@@ -150,13 +150,6 @@ pub async fn refresh_policy(state: &Arc<CoreState>) {
     if let Ok(r) = resp
         && let Ok(v) = r.json::<serde_json::Value>().await
     {
-        if let Some(ports) = v.get("blocked_ports").and_then(|p| p.as_array()) {
-            let list: Vec<u16> = ports
-                .iter()
-                .filter_map(|p| p.as_u64().map(|n| n as u16))
-                .collect();
-            *state.blocked_ports.write().await = list;
-        }
         if let Some(regions) = v.get("blocked_regions").and_then(|p| p.as_array()) {
             let list: Vec<String> = regions
                 .iter()

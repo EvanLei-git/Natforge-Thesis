@@ -7,7 +7,6 @@
 pub mod acme;
 pub mod api;
 pub mod config;
-pub mod ddos;
 pub mod dns;
 pub mod geo;
 pub mod jwt;
@@ -160,8 +159,6 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
-
-    info!("userspace connection-rate DDoS filter active");
 
     let app = api::core_routes(state.clone());
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], config.internal_api_port));

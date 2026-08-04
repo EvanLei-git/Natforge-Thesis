@@ -70,50 +70,12 @@ pub async fn remove_region_block(
     Ok(Json(json!({ "status": "unbanned" })))
 }
 
-pub async fn get_port_blocks(
-    State(state): State<SharedState>,
-    user: AuthUser,
-) -> Result<Json<Vec<i32>>, (StatusCode, String)> {
-    require_admin(&user)?;
-    Ok(Json(queries::port_blocks(&state.db.pg).await.map_err(err)?))
-}
-
-#[derive(Deserialize)]
-pub struct PortBlockReq {
-    pub port: u16,
-}
-
-pub async fn add_port_block(
-    State(state): State<SharedState>,
-    user: AuthUser,
-    Json(payload): Json<PortBlockReq>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_admin(&user)?;
-    queries::add_port_block(&state.db.pg, payload.port)
-        .await
-        .map_err(err)?;
-    Ok(Json(json!({ "status": "banned", "port": payload.port })))
-}
-
-pub async fn remove_port_block(
-    State(state): State<SharedState>,
-    user: AuthUser,
-    Path(port): Path<u16>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_admin(&user)?;
-    queries::remove_port_block(&state.db.pg, port)
-        .await
-        .map_err(err)?;
-    Ok(Json(json!({ "status": "unbanned", "port": port })))
-}
-
 #[derive(Serialize)]
 pub struct NetworkStats {
     pub total_users: i64,
     pub active_tunnels: i64,
     pub total_bytes_relayed: i64,
     pub blocked_regions: i64,
-    pub blocked_ports: i64,
 }
 
 pub async fn network_stats(
@@ -127,7 +89,6 @@ pub async fn network_stats(
         active_tunnels: s.active_tunnels,
         total_bytes_relayed: s.total_bytes_relayed,
         blocked_regions: s.blocked_regions,
-        blocked_ports: s.blocked_ports,
     }))
 }
 

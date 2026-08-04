@@ -6,34 +6,23 @@ use anyhow::Context;
 use rand::Rng;
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::models::{RouteRow, RouteView, TunnelRow, TunnelView, User};
+use crate::models::{Device, RouteRow, RouteView, TunnelRow, TunnelView, User};
 use natforge_proto::RouteMode;
 
 // --------------------------------------------------------------------------
 // Users
 // --------------------------------------------------------------------------
 
-/// Create a user and assign its role. If `admin_email` is set, ONLY an account
-/// registering with that (case-insensitive) email becomes `admin` - there is no
-/// first-come race. If `admin_email` is empty, fall back to the bootstrap rule
-/// "the very first account becomes admin" (handy for local dev / tests).
-pub async fn create_user(
-    pg: &PgPool,
-    email: &str,
-    password_hash: &str,
-    admin_email: &str,
-) -> anyhow::Result<User> {
+/// Create a user. New accounts always get the default `user` role; admin is granted
+/// manually in the database (`UPDATE users SET role='admin' WHERE email=...`).
+pub async fn create_user(pg: &PgPool, email: &str, password_hash: &str) -> anyhow::Result<User> {
     let user = sqlx::query_as::<_, User>(
-        "INSERT INTO users (email, password_hash, role)
-         VALUES ($1, $2, CASE
-             WHEN $3 <> '' AND lower($1) = lower($3) THEN 'admin'
-             WHEN $3 =  '' AND (SELECT count(*) FROM users) = 0 THEN 'admin'
-             ELSE 'user' END)
+        "INSERT INTO users (email, password_hash)
+         VALUES ($1, $2)
          RETURNING id, email, name, password_hash, role, banned, max_tunnels, created_at",
     )
     .bind(email)
     .bind(password_hash)
-    .bind(admin_email)
     .fetch_one(pg)
     .await?;
     Ok(user)
@@ -57,6 +46,110 @@ pub async fn user_by_id(pg: &PgPool, id: i32) -> anyhow::Result<Option<User>> {
     .await?)
 }
 
+/// The per-user cap on how many service hosts (tunnels) an account may own. Defaults to
+/// 10 for a missing row (should not happen for an authenticated caller).
+pub async fn user_max_tunnels(pg: &PgPool, id: i32) -> anyhow::Result<i32> {
+    Ok(
+        sqlx::query_scalar::<_, i32>("SELECT max_tunnels FROM users WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pg)
+            .await?
+            .unwrap_or(10),
+    )
+}
+
+// --------------------------------------------------------------------------
+// Devices (persistent, enrolled agents that own services)
+// --------------------------------------------------------------------------
+
+const DEVICE_COLS: &str = "id, owner_id, name, token_fp, status, agent_ip, last_seen, created_at";
+
+pub async fn create_device(pg: &PgPool, owner_id: i32, name: &str) -> anyhow::Result<Device> {
+    Ok(sqlx::query_as::<_, Device>(&format!(
+        "INSERT INTO devices (owner_id, name) VALUES ($1, $2) RETURNING {DEVICE_COLS}"
+    ))
+    .bind(owner_id)
+    .bind(name)
+    .fetch_one(pg)
+    .await?)
+}
+
+pub async fn list_devices(pg: &PgPool, owner_id: i32) -> anyhow::Result<Vec<Device>> {
+    Ok(sqlx::query_as::<_, Device>(&format!(
+        "SELECT {DEVICE_COLS} FROM devices WHERE owner_id = $1 ORDER BY created_at"
+    ))
+    .bind(owner_id)
+    .fetch_all(pg)
+    .await?)
+}
+
+pub async fn device_by_id(pg: &PgPool, id: i64) -> anyhow::Result<Option<Device>> {
+    Ok(
+        sqlx::query_as::<_, Device>(&format!("SELECT {DEVICE_COLS} FROM devices WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(pg)
+            .await?,
+    )
+}
+
+/// Bind a freshly-issued device token's nonce to the device and mark it online.
+pub async fn set_device_token(pg: &PgPool, id: i64, nonce: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE devices SET token_fp = $1, status = 'online', last_seen = now() WHERE id = $2",
+    )
+    .bind(nonce)
+    .bind(id)
+    .execute(pg)
+    .await?;
+    Ok(())
+}
+
+pub async fn rename_device(
+    pg: &PgPool,
+    id: i64,
+    owner_id: i32,
+    name: &str,
+) -> anyhow::Result<bool> {
+    let r = sqlx::query("UPDATE devices SET name = $1 WHERE id = $2 AND owner_id = $3")
+        .bind(name)
+        .bind(id)
+        .bind(owner_id)
+        .execute(pg)
+        .await?;
+    Ok(r.rows_affected() > 0)
+}
+
+pub async fn delete_device(pg: &PgPool, id: i64, owner_id: i32) -> anyhow::Result<bool> {
+    let r = sqlx::query("DELETE FROM devices WHERE id = $1 AND owner_id = $2")
+        .bind(id)
+        .bind(owner_id)
+        .execute(pg)
+        .await?;
+    Ok(r.rows_affected() > 0)
+}
+
+/// The service tunnels belonging to a device.
+pub async fn device_service_tunnels(pg: &PgPool, device_id: i64) -> anyhow::Result<Vec<TunnelRow>> {
+    Ok(sqlx::query_as::<_, TunnelRow>(
+        "SELECT id, subdomain, name, owner_id, route_sig, status, public_host, node_id, agent_ip, created_at, last_seen
+         FROM tunnels WHERE device_id = $1 ORDER BY id",
+    )
+    .bind(device_id)
+    .fetch_all(pg)
+    .await?)
+}
+
+/// Load a tunnel's routes (non-transactional; used to build a device's config).
+pub async fn routes_for_tunnel(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<Vec<RouteRow>> {
+    Ok(sqlx::query_as::<_, RouteRow>(
+        "SELECT id, tunnel_id, route_id, kind, local_port, public_port, label
+         FROM routes WHERE tunnel_id = $1 ORDER BY route_id",
+    )
+    .bind(tunnel_id)
+    .fetch_all(pg)
+    .await?)
+}
+
 // --------------------------------------------------------------------------
 // Tunnel reservation
 // --------------------------------------------------------------------------
@@ -76,9 +169,12 @@ pub struct ReservedTunnel {
 pub enum ReserveError {
     LimitReached(i32),
     PortExhausted,
-    BlockedPort(u16),
     BadSubdomain,
     SubdomainTaken(String),
+    /// The route-set collides with another of the owner's tunnels *on the same device*
+    /// (the per-device `(owner_id, device_id, route_sig)` uniqueness). Carries the
+    /// colliding signature.
+    RouteSetExists(String),
     Db(anyhow::Error),
 }
 
@@ -222,6 +318,167 @@ pub async fn migrate_tunnel(
     Ok(())
 }
 
+/// Reconcile a tunnel's routes to exactly `requested`, in one transaction, without
+/// tearing the tunnel down. Existing routes matched by `(kind, local_port)` keep
+/// their `route_id`, dedicated port and label; routes no longer requested are dropped
+/// and their pool port freed; newly requested routes get the next dense `route_id`
+/// and (for tcp/udp) a freshly popped pool port. The tunnel's `route_sig` is updated
+/// to the new set so idempotent reuse and the `(owner_id, route_sig)` uniqueness stay
+/// consistent. The running agent picks the change up on its next reconnect (the caller
+/// signals the node to drop the live session). Returns the tunnel's full route list.
+pub async fn set_service_routes(
+    pg: &PgPool,
+    tunnel_id: i64,
+    node_id: &str,
+    requested: &[(RouteMode, u16, Option<String>)],
+) -> Result<Vec<RouteRow>, ReserveError> {
+    let mut tx = pg.begin().await.map_err(|e| ReserveError::Db(e.into()))?;
+    let existing = load_routes(&mut tx, tunnel_id)
+        .await
+        .map_err(ReserveError::Db)?;
+
+    // Keys present in the desired final state, as (kind, local_port).
+    let want: Vec<(&'static str, i32)> = requested
+        .iter()
+        .map(|(m, p, _)| (m.as_str(), *p as i32))
+        .collect();
+
+    // 1) Drop existing routes that are no longer requested (free the pool port first).
+    for r in &existing {
+        let still = want.iter().any(|(k, p)| *k == r.kind && *p == r.local_port);
+        if !still {
+            sqlx::query(
+                "UPDATE port_pool SET tunnel_id=NULL, route_id=NULL
+                 WHERE tunnel_id=$1 AND route_id=$2",
+            )
+            .bind(tunnel_id)
+            .bind(r.route_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ReserveError::Db(e.into()))?;
+            sqlx::query("DELETE FROM routes WHERE tunnel_id=$1 AND route_id=$2")
+                .bind(tunnel_id)
+                .bind(r.route_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| ReserveError::Db(e.into()))?;
+        }
+    }
+
+    // 2) Add newly requested routes, keyed off the current max route_id so dense ids
+    // never collide with a kept route.
+    let mut next_route_id: i16 = existing.iter().map(|r| r.route_id).max().unwrap_or(0);
+    for (mode, local_port, label) in requested {
+        let already = existing
+            .iter()
+            .any(|r| r.kind == mode.as_str() && r.local_port == *local_port as i32);
+        if already {
+            continue;
+        }
+        next_route_id += 1;
+        let label = label
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let public_port: Option<i32> = if mode.is_host_routed() {
+            None
+        } else {
+            let port: Option<i32> = sqlx::query_scalar(
+                "WITH picked AS (
+                     SELECT port FROM port_pool
+                     WHERE node_id = $1 AND tunnel_id IS NULL
+                     ORDER BY port FOR UPDATE SKIP LOCKED LIMIT 1
+                 )
+                 UPDATE port_pool p SET tunnel_id = $2, route_id = $3
+                 FROM picked WHERE p.node_id = $1 AND p.port = picked.port
+                 RETURNING p.port",
+            )
+            .bind(node_id)
+            .bind(tunnel_id)
+            .bind(next_route_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| ReserveError::Db(e.into()))?;
+            match port {
+                Some(p) => Some(p),
+                None => return Err(ReserveError::PortExhausted), // rollback frees everything
+            }
+        };
+        sqlx::query(
+            "INSERT INTO routes (tunnel_id, route_id, kind, local_port, public_port, label)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(tunnel_id)
+        .bind(next_route_id)
+        .bind(mode.as_str())
+        .bind(*local_port as i32)
+        .bind(public_port)
+        .bind(&label)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ReserveError::Db(e.into()))?;
+    }
+
+    // 3) Keep the tunnel's route signature in step with its actual routes so reuse
+    // and the per-device (owner_id, device_id, route_sig) uniqueness remain correct.
+    let pairs: Vec<(RouteMode, u16)> = requested.iter().map(|(m, p, _)| (*m, *p)).collect();
+    let sig = route_signature(&pairs);
+    if let Err(e) = sqlx::query("UPDATE tunnels SET route_sig=$2 WHERE id=$1")
+        .bind(tunnel_id)
+        .bind(&sig)
+        .execute(&mut *tx)
+        .await
+    {
+        return match e {
+            sqlx::Error::Database(db)
+                if db.constraint() == Some("tunnels_owner_device_route_uq") =>
+            {
+                Err(ReserveError::RouteSetExists(sig))
+            }
+            other => Err(ReserveError::Db(other.into())),
+        };
+    }
+
+    let out = load_routes(&mut tx, tunnel_id)
+        .await
+        .map_err(ReserveError::Db)?;
+    tx.commit().await.map_err(|e| ReserveError::Db(e.into()))?;
+    Ok(out)
+}
+
+/// The device a tunnel is a service of, if any.
+pub async fn tunnel_device_id(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<Option<i64>> {
+    Ok(
+        sqlx::query_scalar::<_, Option<i64>>("SELECT device_id FROM tunnels WHERE id = $1")
+            .bind(tunnel_id)
+            .fetch_optional(pg)
+            .await?
+            .flatten(),
+    )
+}
+
+/// The (protocol, local_port) endpoints already claimed by a device's OTHER services
+/// (every service except `exclude_tunnel_id`; pass a non-existent id such as 0 to mean
+/// "all of them"). Used to keep each device's local endpoints unique across its
+/// services so two services never fight over the same local socket. tcp:N and udp:N
+/// are distinct sockets, so uniqueness is on the pair, not the port alone.
+pub async fn device_routes_excluding(
+    pg: &PgPool,
+    device_id: i64,
+    exclude_tunnel_id: i64,
+) -> anyhow::Result<Vec<(String, i32)>> {
+    Ok(sqlx::query_as::<_, (String, i32)>(
+        "SELECT r.kind, r.local_port FROM routes r
+         JOIN tunnels t ON t.id = r.tunnel_id
+         WHERE t.device_id = $1 AND t.id <> $2",
+    )
+    .bind(device_id)
+    .bind(exclude_tunnel_id)
+    .fetch_all(pg)
+    .await?)
+}
+
 async fn insert_tunnel(
     tx: &mut Transaction<'_, Postgres>,
     cand: &str,
@@ -229,16 +486,18 @@ async fn insert_tunnel(
     sig: &str,
     public_host: &str,
     node_id: &str,
+    device_id: Option<i64>,
 ) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar::<_, i64>(
-        "INSERT INTO tunnels (subdomain, owner_id, route_sig, status, public_host, node_id)
-         VALUES ($1, $2, $3, 'awaiting_agent', $4, $5) RETURNING id",
+        "INSERT INTO tunnels (subdomain, owner_id, route_sig, status, public_host, node_id, device_id)
+         VALUES ($1, $2, $3, 'awaiting_agent', $4, $5, $6) RETURNING id",
     )
     .bind(cand)
     .bind(owner_id)
     .bind(sig)
     .bind(public_host)
     .bind(node_id)
+    .bind(device_id)
     .fetch_one(&mut **tx)
     .await
 }
@@ -253,12 +512,14 @@ async fn is_reserved_name(
         .await
 }
 
-/// Atomically and idempotently reserve a tunnel for `owner_id`. If a tunnel with
-/// the same owner + route signature already exists it is reused (so reconnecting
-/// agents keep their subdomain and ports). Otherwise a subdomain is allocated -
-/// the user's chosen one if `custom_subdomain` is given (validated and must be
-/// free), else a random one - TCP ports are popped from the pool, and rows are
-/// inserted; all in one transaction, so any failure rolls back cleanly.
+/// Atomically and idempotently reserve a tunnel for `owner_id` on `device_id` (None for
+/// a device-less CLI service host). Idempotency + uniqueness are scoped to the device,
+/// so the same route set on two DIFFERENT devices is allowed (each machine has its own
+/// local ports), while a reconnecting agent on the same device (or CLI) still reuses its
+/// tunnel. Otherwise a subdomain is allocated - the user's chosen one if
+/// `custom_subdomain` is given (validated and must be free), else a random one - TCP
+/// ports are popped from the pool, and rows are inserted, all in one transaction.
+#[allow(clippy::too_many_arguments)] // each argument is a distinct reservation input
 pub async fn reserve_tunnel(
     pg: &PgPool,
     owner_id: i32,
@@ -267,28 +528,44 @@ pub async fn reserve_tunnel(
     requested: &[(RouteMode, u16, Option<String>)],
     custom_subdomain: Option<&str>,
     max_tunnels: i32,
+    allow_reuse: bool,
+    device_id: Option<i64>,
 ) -> Result<ReservedTunnel, ReserveError> {
     let pairs: Vec<(RouteMode, u16)> = requested.iter().map(|(m, p, _)| (*m, *p)).collect();
     let sig = route_signature(&pairs);
     let mut tx = pg.begin().await.map_err(|e| ReserveError::Db(e.into()))?;
 
-    // Idempotent reuse. FOR UPDATE locks the existing row so a concurrent stop/
-    // reconcile cannot delete it between this read and the token mint.
-    if let Some(existing) = sqlx::query_as::<_, TunnelRow>(
+    // A tunnel with the same (owner, device, route signature) already exists. When reuse
+    // is allowed (a reconnecting agent presenting the same route set) we return it so it
+    // keeps its subdomain and ports; when it is not (an explicit "create a new service
+    // host" from the dashboard) the same set on the same device is a conflict. The device
+    // scope is what lets two different devices expose the same local port.
+    let existing = sqlx::query_as::<_, TunnelRow>(
         "SELECT id, subdomain, name, owner_id, route_sig, status, public_host, node_id, agent_ip, created_at, last_seen
-         FROM tunnels WHERE owner_id = $1 AND route_sig = $2 FOR UPDATE",
+         FROM tunnels
+         WHERE owner_id = $1 AND route_sig = $2 AND COALESCE(device_id, 0) = COALESCE($3::bigint, 0)
+         FOR UPDATE",
     )
     .bind(owner_id)
     .bind(&sig)
+    .bind(device_id)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|e| ReserveError::Db(e.into()))?
-    {
-        let routes = load_routes(&mut tx, existing.id).await.map_err(ReserveError::Db)?;
+    .map_err(|e| ReserveError::Db(e.into()))?;
+    if let Some(existing) = existing {
+        if !allow_reuse {
+            return Err(ReserveError::RouteSetExists(existing.subdomain));
+        }
+        let routes = load_routes(&mut tx, existing.id)
+            .await
+            .map_err(ReserveError::Db)?;
         let custom_domain = load_custom_domain(&mut tx, existing.id)
             .await
             .map_err(|e| ReserveError::Db(e.into()))?;
-        let ex_node = existing.node_id.clone().unwrap_or_else(|| node_id.to_string());
+        let ex_node = existing
+            .node_id
+            .clone()
+            .unwrap_or_else(|| node_id.to_string());
         let ex_host = existing.public_host.clone();
         tx.commit().await.map_err(|e| ReserveError::Db(e.into()))?;
         return Ok(ReservedTunnel {
@@ -327,7 +604,17 @@ pub async fn reserve_tunnel(
         {
             return Err(ReserveError::SubdomainTaken(cand));
         }
-        match insert_tunnel(&mut tx, &cand, owner_id, &sig, public_host, node_id).await {
+        match insert_tunnel(
+            &mut tx,
+            &cand,
+            owner_id,
+            &sig,
+            public_host,
+            node_id,
+            device_id,
+        )
+        .await
+        {
             Ok(id) => (id, cand),
             Err(sqlx::Error::Database(db)) if db.constraint() == Some("tunnels_subdomain_uq") => {
                 return Err(ReserveError::SubdomainTaken(cand));
@@ -344,7 +631,17 @@ pub async fn reserve_tunnel(
             {
                 continue;
             }
-            match insert_tunnel(&mut tx, &cand, owner_id, &sig, public_host, node_id).await {
+            match insert_tunnel(
+                &mut tx,
+                &cand,
+                owner_id,
+                &sig,
+                public_host,
+                node_id,
+                device_id,
+            )
+            .await
+            {
                 Ok(id) => {
                     chosen = Some((id, cand));
                     break;
@@ -470,12 +767,11 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
             Some(nid) => get_node(pg, nid).await?.map(|n| n.region.unwrap_or(n.name)),
             None => None,
         };
-        let custom_domain: Option<String> = sqlx::query_scalar::<_, Option<String>>(
-            "SELECT custom_domain FROM tunnels WHERE id = $1",
-        )
-        .bind(t.id)
-        .fetch_one(pg)
-        .await?;
+        let (custom_domain, device_id): (Option<String>, Option<i64>) =
+            sqlx::query_as("SELECT custom_domain, device_id FROM tunnels WHERE id = $1")
+                .bind(t.id)
+                .fetch_one(pg)
+                .await?;
         // Endpoints use the tunnel's own node public_host (region), not a global domain.
         let host = t.public_host.clone();
         let route_views = routes
@@ -484,10 +780,14 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
                 route_id: r.route_id as u16,
                 mode: r.kind.clone(),
                 local_port: r.local_port,
+                public_port: r.public_port,
                 public_endpoint: route_endpoint(&r.kind, &t.subdomain, &host, r.public_port),
                 label: r.label,
             })
             .collect();
+        let owner = user_by_id(pg, t.owner_id).await?;
+        let owner_email = owner.as_ref().map(|u| u.email.clone());
+        let owner_name = owner.and_then(|u| u.name);
         views.push(TunnelView {
             tunnel_id: t.id,
             full_host: format!("{}.{}", t.subdomain, host),
@@ -497,8 +797,11 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
             status: t.status,
             agent_ip: t.agent_ip,
             owner_id: t.owner_id,
+            owner_email,
+            owner_name,
             node_id: t.node_id,
             region,
+            device_id,
             custom_domain,
             bytes_in,
             bytes_out,
@@ -895,15 +1198,6 @@ pub async fn reconcile_abandoned(pg: &PgPool, grace_secs: i64) -> anyhow::Result
     Ok(deleted)
 }
 
-pub async fn is_port_blocked(pg: &PgPool, port: u16) -> anyhow::Result<bool> {
-    Ok(
-        sqlx::query_scalar("SELECT exists(SELECT 1 FROM port_blocks WHERE port = $1)")
-            .bind(port as i32)
-            .fetch_one(pg)
-            .await?,
-    )
-}
-
 // --------------------------------------------------------------------------
 // Admin policy + stats
 // --------------------------------------------------------------------------
@@ -983,36 +1277,11 @@ pub async fn all_tunnel_region_blocks(
     Ok(map)
 }
 
-pub async fn port_blocks(pg: &PgPool) -> anyhow::Result<Vec<i32>> {
-    Ok(
-        sqlx::query_scalar("SELECT port FROM port_blocks ORDER BY port")
-            .fetch_all(pg)
-            .await?,
-    )
-}
-
-pub async fn add_port_block(pg: &PgPool, port: u16) -> anyhow::Result<()> {
-    sqlx::query("INSERT INTO port_blocks(port) VALUES ($1) ON CONFLICT DO NOTHING")
-        .bind(port as i32)
-        .execute(pg)
-        .await?;
-    Ok(())
-}
-
-pub async fn remove_port_block(pg: &PgPool, port: u16) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM port_blocks WHERE port = $1")
-        .bind(port as i32)
-        .execute(pg)
-        .await?;
-    Ok(())
-}
-
 pub struct Stats {
     pub total_users: i64,
     pub active_tunnels: i64,
     pub total_bytes_relayed: i64,
     pub blocked_regions: i64,
-    pub blocked_ports: i64,
 }
 
 pub async fn stats(pg: &PgPool) -> anyhow::Result<Stats> {
@@ -1037,15 +1306,11 @@ pub async fn stats(pg: &PgPool) -> anyhow::Result<Stats> {
     let blocked_regions: i64 = sqlx::query_scalar("SELECT count(*) FROM region_blocks")
         .fetch_one(pg)
         .await?;
-    let blocked_ports: i64 = sqlx::query_scalar("SELECT count(*) FROM port_blocks")
-        .fetch_one(pg)
-        .await?;
     Ok(Stats {
         total_users,
         active_tunnels,
         total_bytes_relayed: total_bytes.unwrap_or(0),
         blocked_regions,
-        blocked_ports,
     })
 }
 

@@ -29,7 +29,7 @@ thesis already lists it honestly (7.2 "TCP-only data path", 7.3 "UDP tunneling")
 
 - QUIC/unreliable-datagram transport (that is v2, see below).
 - UDP hole punching / P2P (explicitly out of scope, relay only).
-- Per-datagram DDoS/amplification hardening beyond the existing rate guard.
+- Per-datagram abuse/amplification hardening.
 
 ## Design
 
@@ -56,7 +56,7 @@ stream, each datagram is framed as `u16 length` + payload (UDP payloads are
   - Subsequent datagrams from that client: frame and write onto its stream.
   - Frames read back from the stream: `send_to(client_src)` on the `UdpSocket`.
   - Idle timeout (default 60s, tunable) evicts the flow and closes the stream.
-- The connection-rate guard (`ddos.rs`) and geo-block checks apply per new flow
+- Geo-block checks apply per new flow
   (first datagram), mirroring how they apply per TCP connection today.
 - Byte counters and the connection log record per flow, same as TCP.
 

@@ -34,3 +34,6 @@ Thumbs.db
 
 # personal staged-commit plan (not part of the project)
 commit.md
+
+# MaxMind GeoIP license config (contains a secret licence key; provision on the VM, never commit)
+GeoIP.conf

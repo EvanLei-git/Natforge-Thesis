@@ -3,6 +3,7 @@
 //!   * `service-host` - expose one or more local services through a reverse tunnel.
 
 mod auth;
+mod device;
 mod service_host;
 mod tls;
 
@@ -25,7 +26,7 @@ struct Cli {
 enum Mode {
     /// Expose local services through a reverse tunnel.
     ServiceHost {
-        /// A route to expose, as `<local_port>:<http|https|tcp|udp>`. Repeatable.
+        /// A route to expose, as `<local_port>:<http|https|tcp|udp|both>`. Repeatable.
         /// Example: --route 8000:http --route 25565:tcp --route 2456:udp
         #[arg(long = "route")]
         routes: Vec<String>,
@@ -56,13 +57,31 @@ enum Mode {
         #[arg(long)]
         password: Option<String>,
     },
+
+    /// Enroll this machine as a persistent, dashboard-managed device (one-time). Prints
+    /// a short code; enter it in the dashboard's "Add device" to link this machine.
+    Enroll {
+        /// Control-plane (website backend) API endpoint.
+        #[arg(short, long, default_value = "http://127.0.0.1:3000")]
+        control_plane: String,
+    },
+
+    /// Run the enrolled device using the stored device token.
+    Run {
+        /// Override the control-plane endpoint (defaults to the one from enrolment).
+        #[arg(short, long)]
+        control_plane: Option<String>,
+        /// Override the node control address (host:port), for local dev.
+        #[arg(short, long)]
+        tunnel_server: Option<String>,
+    },
 }
 
 fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteSpec>> {
     let mut out = Vec::new();
     for spec in routes {
         let (port_s, mode_s) = spec.split_once(':').ok_or_else(|| {
-            anyhow!("invalid --route '{spec}', expected <local_port>:<http|https|tcp|udp>")
+            anyhow!("invalid --route '{spec}', expected <local_port>:<http|https|tcp|udp|both>")
         })?;
         let local_port: u16 = port_s
             .parse()
@@ -72,6 +91,7 @@ fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteS
             "https" => RouteMode::Https,
             "tcp" => RouteMode::Tcp,
             "udp" => RouteMode::Udp,
+            "both" => RouteMode::Both,
             other => return Err(anyhow!("invalid mode '{other}' in --route '{spec}'")),
         };
         out.push(RouteSpec { mode, local_port });
@@ -121,6 +141,34 @@ async fn main() -> Result<()> {
             .await
             {
                 error!("service host stopped: {e}");
+            }
+        }
+        Mode::Enroll { control_plane } => {
+            let dev = device::enroll(control_plane).await?;
+            device::save(&dev)?;
+            println!(
+                "Enrolled '{}'. Token saved to {}. Start it any time with: natforge run",
+                dev.name,
+                device::config_path()?.display()
+            );
+        }
+        Mode::Run {
+            control_plane,
+            tunnel_server,
+        } => {
+            let dev = device::load()?;
+            let cp = control_plane
+                .clone()
+                .unwrap_or_else(|| dev.control_plane.clone());
+            tracing::info!(
+                "running device '{}' (#{}) against {cp}",
+                dev.name,
+                dev.device_id
+            );
+            if let Err(e) =
+                service_host::run_device(&cp, &dev.device_token, tunnel_server.as_deref()).await
+            {
+                error!("device run stopped: {e}");
             }
         }
     }

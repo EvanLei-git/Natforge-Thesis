@@ -23,7 +23,7 @@ HTML under `views/` references siblings with `../api/...` and `../assets/...`; `
 ## Pages & wiring (all calls via `window.API`)
 - **index.html**, sign in / create account; stores JWT + role; redirects by role.
 - **dashboard.html**, the **Service Host** view: a **tunnel selector** (dropdown) driving a per-tunnel **detail panel** that shows the tunnel's **location** (region), **logging** (bandwidth summary + a recent-connections table from `getTunnelBandwidth`/`getTunnelLogs`), and **blocking** (a per-tunnel country-block editor via `getTunnelRegionBlocks`/`setTunnelRegionBlocks`). A **route builder** modal with an optional **custom subdomain**, a **region** dropdown (`getRegions`), and per-route **label** inputs submits `requestTunnel(routes, subdomain, nodeId)` and prints the exact agent command. A card approves a CLI device code (RFC 8628).
-- **admin.html**, `requireAuth(true)`; stats + region/port blocks + the **regions (nodes)** table (`getNodes`, with rename/enable/disable/remove) + all-tunnels (with agent IP), refreshed on an interval.
+- **admin.html**, `requireAuth(true)`; stats + region blocks + the **regions (nodes)** table (`getNodes`, with rename/enable/disable/remove) + all-tunnels (with agent IP), refreshed on an interval.
 - **users.html**, `requireAuth(true)`; `getUsers()` + `getAllTunnels()`; per-user table (role, tunnel count, traffic, last seen) expanding to that user's tunnels with **agent IP** and route badges.
 
 ## Auth model

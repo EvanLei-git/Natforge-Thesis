@@ -15,6 +15,22 @@ pub struct User {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// `devices` row. A device is a persistent, enrolled agent that owns services.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
+pub struct Device {
+    pub id: i64,
+    pub owner_id: i32,
+    pub name: String,
+    /// Nonce of the issued device token; matched on every device-token use so a
+    /// deleted device revokes its token. Never exposed to the API.
+    #[serde(skip_serializing)]
+    pub token_fp: Option<String>,
+    pub status: String,
+    pub agent_ip: Option<String>,
+    pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// `tunnels` row.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TunnelRow {
@@ -107,6 +123,9 @@ pub struct RouteView {
     pub route_id: u16,
     pub mode: String,
     pub local_port: i32,
+    /// The dedicated public port for tcp/udp/both; None for host-routed http/https
+    /// (which share the wildcard host on 80/443).
+    pub public_port: Option<i32>,
     pub public_endpoint: String,
     pub label: Option<String>,
 }
@@ -121,9 +140,14 @@ pub struct TunnelView {
     pub status: String,
     pub agent_ip: Option<String>,
     pub owner_id: i32,
+    /// Owner identity for the admin tunnel list (email always present, name optional).
+    pub owner_email: Option<String>,
+    pub owner_name: Option<String>,
     /// The node hosting this tunnel + its human region label (for the location UI).
     pub node_id: Option<String>,
     pub region: Option<String>,
+    /// The device this tunnel is a service of, if any (groups services under devices).
+    pub device_id: Option<i64>,
     /// User-owned hostname fronting this tunnel, if set.
     pub custom_domain: Option<String>,
     pub bytes_in: i64,
