@@ -34,6 +34,9 @@ use crate::db::connection::AppState;
 /// Tunnels silent longer than this are reclaimed (ports freed, row deleted).
 const RECONCILE_GRACE_SECS: i64 = 3600;
 
+/// A device is flipped offline once its agent has stopped polling for this long.
+const DEVICE_OFFLINE_GRACE_SECS: i64 = 45;
+
 /// Serve a clean, extensionless page URL from the views directory: "/" maps to the
 /// landing page and "/<name>" to `views/<name>.html`. The name is restricted to
 /// `[A-Za-z0-9_-]`, so a request can never traverse out of the views directory.
@@ -92,6 +95,14 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!("reconciliation error: {e}"),
+                }
+                if let Err(e) = crate::db::queries::mark_stale_devices_offline(
+                    &st.db.pg,
+                    DEVICE_OFFLINE_GRACE_SECS,
+                )
+                .await
+                {
+                    tracing::warn!("device liveness sweep error: {e}");
                 }
             }
         });

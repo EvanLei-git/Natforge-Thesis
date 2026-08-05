@@ -413,6 +413,8 @@ pub async fn device_config(
     dev: DeviceAuth,
 ) -> Result<Json<Vec<TunnelRequestRes>>, (StatusCode, String)> {
     let db_err = |e: anyhow::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    // The running agent polls this endpoint; treat each poll as a liveness heartbeat.
+    let _ = queries::touch_device_online(&state.db.pg, dev.device_id).await;
     let tunnels = queries::device_service_tunnels(&state.db.pg, dev.device_id)
         .await
         .map_err(db_err)?;

@@ -92,16 +92,51 @@ pub async fn device_by_id(pg: &PgPool, id: i64) -> anyhow::Result<Option<Device>
     )
 }
 
-/// Bind a freshly-issued device token's nonce to the device and mark it online.
+/// Bind a freshly-issued device token's nonce to the device. Does NOT mark it online:
+/// a device is online only while its agent is actually polling (see `touch_device_online`).
 pub async fn set_device_token(pg: &PgPool, id: i64, nonce: &str) -> anyhow::Result<()> {
-    sqlx::query(
-        "UPDATE devices SET token_fp = $1, status = 'online', last_seen = now() WHERE id = $2",
+    sqlx::query("UPDATE devices SET token_fp = $1 WHERE id = $2")
+        .bind(nonce)
+        .bind(id)
+        .execute(pg)
+        .await?;
+    Ok(())
+}
+
+/// Liveness heartbeat: the running agent polls its config, which marks the device
+/// online and refreshes `last_seen`. Best-effort (the poll still succeeds if this fails).
+pub async fn touch_device_online(pg: &PgPool, id: i64) -> anyhow::Result<()> {
+    sqlx::query("UPDATE devices SET status = 'online', last_seen = now() WHERE id = $1")
+        .bind(id)
+        .execute(pg)
+        .await?;
+    Ok(())
+}
+
+/// Flip online devices to offline once their agent has stopped polling for `grace_secs`.
+pub async fn mark_stale_devices_offline(pg: &PgPool, grace_secs: i64) -> anyhow::Result<u64> {
+    let r = sqlx::query(
+        "UPDATE devices SET status = 'offline'
+         WHERE status = 'online'
+           AND (last_seen IS NULL OR last_seen < now() - make_interval(secs => $1))",
     )
-    .bind(nonce)
-    .bind(id)
+    .bind(grace_secs as f64)
     .execute(pg)
     .await?;
-    Ok(())
+    Ok(r.rows_affected())
+}
+
+/// De-attach the current agent: revoke its token and mark the device offline, keeping
+/// the device row and all its service hosts so a different machine can be attached.
+pub async fn disconnect_device(pg: &PgPool, id: i64, owner_id: i32) -> anyhow::Result<bool> {
+    let r = sqlx::query(
+        "UPDATE devices SET token_fp = NULL, status = 'offline' WHERE id = $1 AND owner_id = $2",
+    )
+    .bind(id)
+    .bind(owner_id)
+    .execute(pg)
+    .await?;
+    Ok(r.rows_affected() > 0)
 }
 
 pub async fn rename_device(

@@ -52,7 +52,7 @@ pub async fn enroll_start(
     State(state): State<SharedState>,
 ) -> Result<Json<EnrollStartRes>, (StatusCode, String)> {
     let device_code = random_from(HEX, 40);
-    let user_code = format!("{}-{}", random_from(UC, 4), random_from(UC, 4));
+    let user_code = random_from(UC, 8);
     connection::devcode_create(&state.db.redis, &user_code, &device_code)
         .await
         .map_err(db_err)?;
@@ -101,7 +101,7 @@ pub async fn enroll_approve(
             "too many attempts; wait a minute and try again".into(),
         ));
     }
-    let code = payload.user_code.trim().to_uppercase();
+    let code = payload.user_code.trim().to_uppercase().replace('-', "");
     // Link an existing owned device, or create a fresh one to bind the code to.
     let (device_id, created, name) = match payload.device_id {
         Some(did) => {
@@ -271,6 +271,24 @@ pub async fn delete_device(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let ok = queries::delete_device(&state.db.pg, id, user.user_id)
+        .await
+        .map_err(db_err)?;
+    if ok {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::NOT_FOUND, "device not found".into()))
+    }
+}
+
+/// De-attach the current machine from a device: revokes the running agent's token and
+/// marks it offline, but keeps the device and its service hosts so the user can connect
+/// a different machine (agent-first, via the enrollment code) without losing anything.
+pub async fn disconnect_device(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let ok = queries::disconnect_device(&state.db.pg, id, user.user_id)
         .await
         .map_err(db_err)?;
     if ok {

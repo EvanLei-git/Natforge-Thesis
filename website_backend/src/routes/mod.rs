@@ -29,6 +29,10 @@ pub fn api_router(state: SharedState) -> Router {
             "/api/devices/{id}",
             patch(devices::rename_device).delete(devices::delete_device),
         )
+        .route(
+            "/api/devices/{id}/disconnect",
+            post(devices::disconnect_device),
+        )
         // --- Service-host tunnels ---
         .route("/api/tunnels", get(tunnels::get_tunnels))
         .route("/api/tunnels/request", post(tunnels::request_tunnel))

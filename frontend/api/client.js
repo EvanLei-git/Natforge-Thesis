@@ -60,6 +60,7 @@ class NatForgeAPI {
     approveDeviceEnroll(userCode, name, deviceId) { return this._req('POST', '/devices/enroll/approve', { user_code: userCode, name: name || null, device_id: deviceId || null }); }
     renameDevice(id, name)              { return this._req('PATCH', `/devices/${encodeURIComponent(id)}`, { name }); }
     deleteDevice(id)                    { return this._req('DELETE', `/devices/${encodeURIComponent(id)}`); }
+    disconnectDevice(id)                { return this._req('POST', `/devices/${encodeURIComponent(id)}/disconnect`); }
 
     // --- Service-host tunnels ---
     getTunnels()          { return this._req('GET', '/tunnels'); }

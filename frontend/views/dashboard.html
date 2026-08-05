@@ -72,7 +72,7 @@
             <div class="field">
                 <label class="lbl">Code from your machine <span class="faint small">(optional)</span></label>
                 <p class="muted small" style="margin:0 0 6px">On the machine, run <code>natforge enroll</code>. It prints a short code (valid 1 hour). Paste it here to connect the device now, or leave blank to add it and connect later.</p>
-                <input type="text" id="enrollCode" class="input code-input" placeholder="ABCD-EFGH">
+                <input type="text" id="enrollCode" class="input code-input" placeholder="ABCDEFGH">
             </div>
             <button class="btn btn-primary" id="addDeviceSubmit"><span data-icon="plus"></span> Create device</button>
         </div>
@@ -279,7 +279,7 @@
                         </li>
                         <li style="margin-bottom:14px"><strong>Enter the code here</strong> to link this device:
                             <div class="row-inline" style="gap:8px; align-items:center; max-width:420px; margin-top:6px">
-                                <input type="text" id="devLinkCode-${device.id}" class="input code-input" placeholder="ABCD-EFGH" style="flex:1">
+                                <input type="text" id="devLinkCode-${device.id}" class="input code-input" placeholder="ABCDEFGH" style="flex:1">
                                 <button class="btn btn-primary" onclick="linkDevice(${device.id})">${nfIcon('device')} Link</button>
                             </div>
                         </li>
@@ -296,6 +296,7 @@
                         <h5>Device</h5>
                         <div class="row-inline" style="gap:8px">
                             <button class="btn btn-secondary btn-sm" title="Rename device" onclick="renameDevicePrompt(${device.id}, ${escapeAttr(device.name || '')})">${nfIcon('edit')} Rename</button>
+                            ${connected ? `<button class="btn btn-secondary btn-sm" title="Disconnect the current machine; keeps the device and its service hosts so you can connect another" onclick="disconnectDevice(${device.id}, ${escapeAttr(name)})">${nfIcon('link')} Disconnect</button>` : ''}
                             <button class="btn btn-danger btn-sm" title="Remove device" onclick="removeDevice(${device.id}, ${escapeAttr(name)})">${nfIcon('trash')} Remove</button>
                         </div>
                     </div>
@@ -722,6 +723,12 @@
         });
 
         // Link a not-yet-connected device: enter the code the agent printed on that box.
+        async function disconnectDevice(id, name) {
+            if (!await nfConfirm({ title: 'Disconnect machine', confirmText: 'Disconnect',
+                message: `Disconnect the current machine from "${name}"? The device and its service hosts are kept, so you can connect a different machine afterwards.` })) return;
+            try { await API.disconnectDevice(id); toast('Machine disconnected', 'success'); loadDevices(); }
+            catch (e) { toast(e.message, 'danger'); }
+        }
         async function linkDevice(deviceId) {
             const inp = document.getElementById('devLinkCode-' + deviceId);
             const code = inp ? inp.value.trim() : '';
