@@ -241,8 +241,17 @@
             });
         }
 
+        // Copy a command block's text to the clipboard (used by the connect guide).
+        function copyCmd(id) {
+            const el = document.getElementById(id);
+            if (el && navigator.clipboard) {
+                navigator.clipboard.writeText(el.textContent.trim())
+                    .then(() => toast('Copied', 'success')).catch(() => {});
+            }
+        }
+
         // The device info block: a page title + a Device card. Not-connected devices show
-        // an inline "enter the code your machine printed" field to connect them.
+        // a short step-by-step guide (download the agent, enroll, link, run) to connect them.
         function deviceHeaderHtml(device, svcs) {
             const idx = devicesCache.findIndex(d => d.id === device.id);
             const name = deviceLabel(device, idx);
@@ -254,11 +263,31 @@
             const connect = connected ? '' : `
                 <div class="field mt" style="margin-bottom:0">
                     <label class="lbl">Connect this machine</label>
-                    <p class="muted small" style="margin:0 0 6px">On the machine, run <code>natforge enroll</code>. It prints a short code (valid 1 hour); enter it here to connect this device.</p>
-                    <div class="row-inline" style="gap:8px; align-items:center; max-width:420px">
-                        <input type="text" id="devLinkCode-${device.id}" class="input code-input" placeholder="ABCD-EFGH" style="flex:1">
-                        <button class="btn btn-primary" onclick="linkDevice(${device.id})">${nfIcon('device')} Link</button>
-                    </div>
+                    <p class="muted small" style="margin:0 0 10px">Install the NatForge agent on the Linux machine you want to expose (x86_64), then link it here. Takes about a minute.</p>
+                    <ol style="margin:0; padding-left:20px; line-height:1.6">
+                        <li style="margin-bottom:14px"><strong>Download the agent</strong> on that machine:
+                            <pre class="block" id="nfDl-${device.id}" style="margin:6px 0 4px">curl -L https://github.com/EvanLei-git/Thesis-reverse-proxy/releases/latest/download/natforge-x86_64-linux-musl -o natforge &amp;&amp; chmod +x natforge</pre>
+                            <div class="row-inline" style="gap:8px">
+                                <button class="btn btn-secondary btn-sm" onclick="copyCmd('nfDl-${device.id}')">Copy</button>
+                                <a class="btn btn-secondary btn-sm" href="https://github.com/EvanLei-git/Thesis-reverse-proxy/releases/latest" target="_blank" rel="noopener">${nfIcon('download')} Releases page</a>
+                            </div>
+                            <p class="faint small" style="margin:4px 0 0">Static build, runs on any x86_64 Linux (no dependencies).</p>
+                        </li>
+                        <li style="margin-bottom:14px"><strong>Get your code</strong>: enroll the machine (prints a short code, valid 1 hour):
+                            <pre class="block" id="nfEnroll-${device.id}" style="margin:6px 0 4px">./natforge enroll --control-plane https://natforge.com</pre>
+                            <button class="btn btn-secondary btn-sm" onclick="copyCmd('nfEnroll-${device.id}')">Copy</button>
+                        </li>
+                        <li style="margin-bottom:14px"><strong>Enter the code here</strong> to link this device:
+                            <div class="row-inline" style="gap:8px; align-items:center; max-width:420px; margin-top:6px">
+                                <input type="text" id="devLinkCode-${device.id}" class="input code-input" placeholder="ABCD-EFGH" style="flex:1">
+                                <button class="btn btn-primary" onclick="linkDevice(${device.id})">${nfIcon('device')} Link</button>
+                            </div>
+                        </li>
+                        <li><strong>Start it</strong> and leave it running (it serves the service hosts you add below):
+                            <pre class="block" id="nfRun-${device.id}" style="margin:6px 0 4px">./natforge run</pre>
+                            <button class="btn btn-secondary btn-sm" onclick="copyCmd('nfRun-${device.id}')">Copy</button>
+                        </li>
+                    </ol>
                 </div>`;
             return `
                 <h2 class="page-title" style="margin-bottom:12px">${nfIcon('device')} ${escapeHtml(name)}</h2>
