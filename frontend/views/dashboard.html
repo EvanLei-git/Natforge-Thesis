@@ -140,12 +140,36 @@
                 ? `<a href="${r.public_endpoint}" target="_blank" rel="noopener">${r.public_endpoint} ${nfIcon('link')}</a>`
                 : `<span class="endpoint">${r.public_endpoint}</span>`;
             const label = r.label ? `<span class="badge tag" style="margin-right:6px">${r.label}</span>` : '';
-            // Only offer per-port removal when the service keeps more than one route.
-            const rm = (t && t.routes.length > 1)
+            // A port can always be removed, including the last one (the service host then
+            // parks at 0 ports, keeping its name; ports can be added back any time).
+            const rm = t
                 ? `<button class="btn btn-danger btn-icon btn-sm" title="Remove this port" style="margin-left:auto" onclick="removeServicePort(${t.tunnel_id}, ${r.route_id})">${nfIcon('trash')}</button>`
                 : '';
             return `<div class="route-line" style="align-items:center">${label}<span class="badge ${r.mode}">${r.mode}</span> ${ep} <span class="faint small">&larr; :${r.local_port}</span>${rm}</div>`;
         }
+
+        // Idle-reclamation countdown: a service host with no traffic for 31 days has its
+        // dedicated public ports auto-released (the name is kept). The server sends the base
+        // timestamp once; the browser ticks locally so we never poll per second.
+        const IDLE_MS = 31 * 24 * 3600 * 1000;
+        function expiresIso(t) {
+            if (!t.routes || !t.routes.length) return '';   // parked: nothing to expire
+            const base = t.last_active_at || t.created_at;
+            return base ? new Date(new Date(base).getTime() + IDLE_MS).toISOString() : '';
+        }
+        function fmtCountdown(ms) {
+            if (ms <= 0) return 'Idle limit reached; ports will be released shortly.';
+            const d = Math.floor(ms / 86400000), h = Math.floor(ms % 86400000 / 3600000), m = Math.floor(ms % 3600000 / 60000);
+            return `Auto-releases ports in ${d}d ${h}h ${m}m if no traffic.`;
+        }
+        function tickCountdowns() {
+            const now = Date.now();
+            document.querySelectorAll('.nf-countdown').forEach(el => {
+                const exp = el.dataset.expires;
+                el.textContent = exp ? fmtCountdown(new Date(exp).getTime() - now) : '';
+            });
+        }
+        setInterval(tickCountdowns, 1000);
 
         function tunnelName(t) {
             const label = t.routes.map(r => r.label).find(Boolean);
@@ -209,8 +233,8 @@
                 return;
             }
             const svcs = tunnelsCache.filter(t => t.device_id === selectedDeviceId);
-            const sig = device.id + '::' + device.status + '::' + svcs.map(s =>
-                `${s.tunnel_id}:${s.name || ''}:${s.subdomain}:${s.custom_domain || ''}:${s.region || ''}:`
+            const sig = device.id + '::' + device.status + '::' + (device.name || '') + '::' + svcs.map(s =>
+                `${s.tunnel_id}:${s.status}:${s.name || ''}:${s.subdomain}:${s.custom_domain || ''}:${s.region || ''}:`
                 + s.routes.map(r => `${r.mode}${r.local_port}${r.public_endpoint}`).join('+')
             ).join(';;');
             if (sig !== deviceViewSig) { deviceViewSig = sig; buildDeviceView(device, svcs); }
@@ -225,6 +249,7 @@
             host.innerHTML = deviceHeaderHtml(device, svcs) + sections;
             svcs.forEach(t => loadConnLogs(t.tunnel_id));
             setupScrollSpy(svcs);
+            tickCountdowns();
         }
 
         // Update only the volatile bits (status, bandwidth, logs) so a timer tick never
@@ -237,8 +262,12 @@
                 set('bin', fmtBytes(t.bytes_in));
                 set('bout', fmtBytes(t.bytes_out));
                 set('btot', fmtBytes(t.bytes_in + t.bytes_out));
+                // Refresh the countdown base: traffic since last render may have reset it.
+                const exp = document.getElementById(`svc-${t.tunnel_id}-exp`);
+                if (exp) exp.dataset.expires = expiresIso(t);
                 loadConnLogs(t.tunnel_id);
             });
+            tickCountdowns();
         }
 
         // Copy a command block's text to the clipboard (used by the connect guide).
@@ -257,8 +286,7 @@
             const name = deviceLabel(device, idx);
             const connected = device.status === 'online';
             const meta = connected
-                ? `${device.agent_ip ? `<span class="faint small">agent ${escapeHtml(device.agent_ip)}</span>` : ''}
-                   ${device.last_seen ? `<span class="faint small">seen ${escapeHtml(fmtAgo(device.last_seen))}</span>` : ''}`
+                ? `${device.agent_ip ? `<span class="faint small">agent ${escapeHtml(device.agent_ip)}</span>` : ''}`
                 : `<span class="faint small">not connected</span>`;
             const connect = connected ? '' : `
                 <div class="field mt" style="margin-bottom:0">
@@ -295,8 +323,8 @@
                     <div class="card-head">
                         <h5>Device</h5>
                         <div class="row-inline" style="gap:8px">
-                            <button class="btn btn-secondary btn-sm" title="Rename device" onclick="renameDevicePrompt(${device.id}, ${escapeAttr(device.name || '')})">${nfIcon('edit')} Rename</button>
-                            ${connected ? `<button class="btn btn-secondary btn-sm" title="Disconnect the current machine; keeps the device and its service hosts so you can connect another" onclick="disconnectDevice(${device.id}, ${escapeAttr(name)})">${nfIcon('link')} Disconnect</button>` : ''}
+                            <button class="btn btn-secondary btn-sm" title="Rename device" onclick="renameDevicePrompt(${device.id})">${nfIcon('edit')} Rename</button>
+                            ${device.status !== 'pending' ? `<button class="btn btn-secondary btn-sm" title="Disconnect the attached machine (online or offline); keeps the device and its service hosts so you can connect another" onclick="disconnectDevice(${device.id}, ${escapeAttr(name)})">${nfIcon('link')} Disconnect</button>` : ''}
                             <button class="btn btn-danger btn-sm" title="Remove device" onclick="removeDevice(${device.id}, ${escapeAttr(name)})">${nfIcon('trash')} Remove</button>
                         </div>
                     </div>
@@ -332,7 +360,9 @@
                     </div>
                     <div class="row-inline" style="gap:8px">
                         <button class="btn btn-secondary btn-icon" title="Edit service host" onclick="editTunnel(${t.tunnel_id})">${nfIcon('edit')}</button>
-                        <button class="btn btn-secondary btn-sm" onclick="stopTunnel(${t.tunnel_id})" title="Drop the live session but keep the service host">${nfIcon('stop')} Stop</button>
+                        ${t.status === 'stopped'
+                            ? `<button class="btn btn-primary btn-sm" onclick="startTunnel(${t.tunnel_id})" title="Resume serving this service host">${nfIcon('bolt')} Start</button>`
+                            : `<button class="btn btn-secondary btn-sm" onclick="stopTunnel(${t.tunnel_id})" title="Pause serving this service host (keeps it and its ports)">${nfIcon('stop')} Stop</button>`}
                         <button class="btn btn-danger btn-sm" onclick="deleteTunnel(${t.tunnel_id})" title="Remove the service host and free its ports">${nfIcon('trash')} Delete</button>
                     </div>
                 </div>
@@ -341,7 +371,8 @@
                         <label class="lbl" style="margin-bottom:0">Ports</label>
                         <button class="btn btn-secondary btn-sm" title="Add another port to this service host" onclick="addServicePort(${t.tunnel_id})">${nfIcon('plus')} Add port</button>
                     </div>
-                    <div class="mt-xs">${routes}</div>
+                    <div class="mt-xs">${routes || '<p class="faint small" style="margin:4px 0">No ports. Add one to start serving.</p>'}</div>
+                    <div class="faint small mt-xs nf-countdown" id="svc-${t.tunnel_id}-exp" data-expires="${expiresIso(t)}"></div>
 
                     <label class="lbl mt">Custom domain</label>
                     <div class="row-inline" style="gap:8px; align-items:center; flex-wrap:wrap">
@@ -444,7 +475,11 @@
 
         // Stop: drop the live session but KEEP the tunnel (status 'stopped', restartable).
         async function stopTunnel(id) {
-            try { await API.stopTunnel(id); toast('Tunnel stopped (kept - restart by re-running the agent)', 'success'); loadTunnels(); }
+            try { await API.stopTunnel(id); toast('Service paused. Press Start to resume.', 'success'); loadTunnels(); }
+            catch (err) { toast(err.message, 'danger'); }
+        }
+        async function startTunnel(id) {
+            try { await API.startTunnel(id); toast('Resuming... it serves again within a few seconds.', 'success'); loadTunnels(); }
             catch (err) { toast(err.message, 'danger'); }
         }
         // Delete: remove the tunnel and free its ports.
@@ -579,11 +614,13 @@
         async function removeServicePort(tunnelId, routeId) {
             const t = tunnelsCache.find(x => x.tunnel_id === tunnelId);
             if (!t) return;
-            if (t.routes.length <= 1) { toast('A service needs at least one port', 'danger'); return; }
             const gone = t.routes.find(r => r.route_id === routeId);
             if (!gone) return;
+            const last = t.routes.length <= 1;
             if (!await nfConfirm({ title: 'Remove port', danger: true, confirmText: 'Remove',
-                message: `Remove ${gone.mode}:${gone.local_port} from this service? Its public address is released.` })) return;
+                message: last
+                    ? `Remove the last port (${gone.mode}:${gone.local_port})? Its public address is released and the service host is kept with no ports; you can add ports back any time.`
+                    : `Remove ${gone.mode}:${gone.local_port} from this service? Its public address is released.` })) return;
             const routes = routePayload(t).filter(r => !(r.mode === gone.mode && r.local_port === gone.local_port));
             try {
                 await API.setServiceRoutes(tunnelId, routes);
@@ -661,12 +698,14 @@
             host.innerHTML = html;
         }
 
-        async function renameDevicePrompt(id, currentName) {
+        async function renameDevicePrompt(id) {
+            // Read the current name fresh from the cache so a prior rename never shows stale.
+            const dev = devicesCache.find(d => d.id === id);
             const res = await nfPrompt({ title: 'Device display name', confirmText: 'Save',
                 message: 'Shown in the sidebar. Leave blank to fall back to the numbered name.',
-                fields: [{ key: 'name', label: 'Display name (optional)', value: currentName, placeholder: 'Home PC' }] });
+                fields: [{ key: 'name', label: 'Display name (optional)', value: dev ? (dev.name || '') : '', placeholder: 'Home PC' }] });
             if (res === null) return;
-            try { await API.renameDevice(id, (res.name || '').trim() || null); toast('Device renamed', 'success'); loadDevices(); }
+            try { await API.renameDevice(id, (res.name || '').trim() || null); toast('Device renamed', 'success'); await loadDevices(); renderMain(); }
             catch (err) { toast(err.message, 'danger'); }
         }
         async function removeDevice(id, name) {

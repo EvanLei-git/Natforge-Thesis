@@ -77,6 +77,7 @@ class NatForgeAPI {
         });
     }
     stopTunnel(tunnelId)  { return this._req('POST', `/tunnels/${encodeURIComponent(tunnelId)}/stop`); }
+    startTunnel(tunnelId) { return this._req('POST', `/tunnels/${encodeURIComponent(tunnelId)}/start`); }
     deleteTunnel(tunnelId){ return this._req('DELETE', `/tunnels/${encodeURIComponent(tunnelId)}`); }
     renameTunnel(tunnelId, name) { return this._req('PATCH', `/tunnels/${encodeURIComponent(tunnelId)}`, { name: name || null }); }
     // Full edit: { subdomain?, name?, route_labels?: [{route_id, label}] }.

@@ -126,11 +126,12 @@ pub async fn mark_stale_devices_offline(pg: &PgPool, grace_secs: i64) -> anyhow:
     Ok(r.rows_affected())
 }
 
-/// De-attach the current agent: revoke its token and mark the device offline, keeping
-/// the device row and all its service hosts so a different machine can be attached.
+/// De-attach the current agent: revoke its token and return the device to the
+/// unattached ('pending') state, keeping the device row and all its service hosts so
+/// a different machine can be attached. Works whether the device is online or offline.
 pub async fn disconnect_device(pg: &PgPool, id: i64, owner_id: i32) -> anyhow::Result<bool> {
     let r = sqlx::query(
-        "UPDATE devices SET token_fp = NULL, status = 'offline' WHERE id = $1 AND owner_id = $2",
+        "UPDATE devices SET token_fp = NULL, status = 'pending' WHERE id = $1 AND owner_id = $2",
     )
     .bind(id)
     .bind(owner_id)
@@ -802,11 +803,16 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
             Some(nid) => get_node(pg, nid).await?.map(|n| n.region.unwrap_or(n.name)),
             None => None,
         };
-        let (custom_domain, device_id): (Option<String>, Option<i64>) =
-            sqlx::query_as("SELECT custom_domain, device_id FROM tunnels WHERE id = $1")
-                .bind(t.id)
-                .fetch_one(pg)
-                .await?;
+        let (custom_domain, device_id, last_active_at): (
+            Option<String>,
+            Option<i64>,
+            Option<chrono::DateTime<chrono::Utc>>,
+        ) = sqlx::query_as(
+            "SELECT custom_domain, device_id, last_active_at FROM tunnels WHERE id = $1",
+        )
+        .bind(t.id)
+        .fetch_one(pg)
+        .await?;
         // Endpoints use the tunnel's own node public_host (region), not a global domain.
         let host = t.public_host.clone();
         let route_views = routes
@@ -841,6 +847,7 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
             bytes_in,
             bytes_out,
             created_at: t.created_at,
+            last_active_at,
             routes: route_views,
         });
     }
@@ -950,6 +957,18 @@ pub async fn delete_tunnel(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<u64> {
 pub async fn stop_tunnel_keep(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<u64> {
     Ok(
         sqlx::query("UPDATE tunnels SET status='stopped', last_seen=now() WHERE id=$1")
+            .bind(tunnel_id)
+            .execute(pg)
+            .await?
+            .rows_affected(),
+    )
+}
+
+/// Resume a paused service host: clear the `stopped` status so `device_config` hands it
+/// back to the agent, which reconnects and serves it (status becomes `online` again).
+pub async fn start_tunnel_keep(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<u64> {
+    Ok(
+        sqlx::query("UPDATE tunnels SET status='awaiting_agent' WHERE id=$1 AND status='stopped'")
             .bind(tunnel_id)
             .execute(pg)
             .await?
@@ -1112,6 +1131,16 @@ pub async fn append_bandwidth(
     bytes_in: i64,
     bytes_out: i64,
 ) -> anyhow::Result<()> {
+    // Detect real traffic: the node reports cumulative totals every few seconds even when
+    // idle, so only a strict increase over the previous snapshot counts as activity. That
+    // refreshes `last_active_at`, which drives the 31-day idle-reclamation timer.
+    let prev: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT bytes_in, bytes_out FROM bandwidth_logs
+         WHERE tunnel_id = $1 ORDER BY recorded_at DESC LIMIT 1",
+    )
+    .bind(tunnel_id)
+    .fetch_optional(pg)
+    .await?;
     sqlx::query(
         "INSERT INTO bandwidth_logs (tunnel_id, owner_id, bytes_in, bytes_out) VALUES ($1,$2,$3,$4)",
     )
@@ -1121,10 +1150,16 @@ pub async fn append_bandwidth(
     .bind(bytes_out)
     .execute(pg)
     .await?;
-    sqlx::query("UPDATE tunnels SET last_seen=now() WHERE id=$1")
-        .bind(tunnel_id)
-        .execute(pg)
-        .await?;
+    let active = match prev {
+        Some((pi, po)) => bytes_in > pi || bytes_out > po,
+        None => bytes_in > 0 || bytes_out > 0,
+    };
+    let touch = if active {
+        "UPDATE tunnels SET last_seen=now(), last_active_at=now() WHERE id=$1"
+    } else {
+        "UPDATE tunnels SET last_seen=now() WHERE id=$1"
+    };
+    sqlx::query(touch).bind(tunnel_id).execute(pg).await?;
     Ok(())
 }
 
@@ -1209,9 +1244,13 @@ pub async fn tunnel_owner(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<Option<
 /// (covers crashed agents/cores whose `tunnel_down` never arrived).
 pub async fn reconcile_abandoned(pg: &PgPool, grace_secs: i64) -> anyhow::Result<u64> {
     let mut tx = pg.begin().await?;
+    // `device_id IS NULL`: only reclaim *ephemeral* (service-host mode) tunnels. A device's
+    // service hosts are persistent, server-authoritative config that the agent re-serves on
+    // reconnect, so a temporary node/VM outage must not delete them.
     let stale: Vec<i64> = sqlx::query_scalar(
         "SELECT id FROM tunnels
          WHERE status NOT IN ('awaiting_agent', 'stopped')
+           AND device_id IS NULL
            AND COALESCE(last_seen, created_at) < now() - make_interval(secs => $1)",
     )
     .bind(grace_secs as f64)
@@ -1231,6 +1270,42 @@ pub async fn reconcile_abandoned(pg: &PgPool, grace_secs: i64) -> anyhow::Result
         .rows_affected();
     tx.commit().await?;
     Ok(deleted)
+}
+
+/// Reclaim the dedicated public ports of *device* service hosts that have carried no
+/// traffic for `idle_secs`, while keeping the service-host row (its name/organization).
+/// The routes are deleted, their pool ports freed, and `route_sig` cleared to '' so the
+/// host becomes a 0-port "parked" service the owner can add ports back to. Returns the
+/// number of service hosts reclaimed.
+pub async fn expire_idle_service_hosts(pg: &PgPool, idle_secs: i64) -> anyhow::Result<u64> {
+    let mut tx = pg.begin().await?;
+    // Only device service hosts that still have routes and have been idle past the window.
+    let idle: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM tunnels
+         WHERE device_id IS NOT NULL
+           AND route_sig <> ''
+           AND COALESCE(last_active_at, created_at) < now() - make_interval(secs => $1)",
+    )
+    .bind(idle_secs as f64)
+    .fetch_all(&mut *tx)
+    .await?;
+    if idle.is_empty() {
+        return Ok(0);
+    }
+    sqlx::query("UPDATE port_pool SET tunnel_id=NULL, route_id=NULL WHERE tunnel_id = ANY($1)")
+        .bind(&idle)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM routes WHERE tunnel_id = ANY($1)")
+        .bind(&idle)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE tunnels SET route_sig='' WHERE id = ANY($1)")
+        .bind(&idle)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(idle.len() as u64)
 }
 
 // --------------------------------------------------------------------------

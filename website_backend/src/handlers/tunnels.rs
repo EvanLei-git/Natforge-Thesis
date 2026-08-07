@@ -420,6 +420,11 @@ pub async fn device_config(
         .map_err(db_err)?;
     let mut out = Vec::with_capacity(tunnels.len());
     for t in &tunnels {
+        // A paused service host (owner pressed Stop) is withheld from the agent, which
+        // then tears it down; pressing Start restores it to the config and it resumes.
+        if t.status == "stopped" {
+            continue;
+        }
         let Some(node_id) = t.node_id.as_deref() else {
             continue;
         };
@@ -432,6 +437,10 @@ pub async fn device_config(
         let routes = queries::routes_for_tunnel(&state.db.pg, t.id)
             .await
             .map_err(db_err)?;
+        // A parked (0-port) service host has nothing to serve; don't hand it to the agent.
+        if routes.is_empty() {
+            continue;
+        }
         out.push(build_reservation(
             &state.config.jwt_secret,
             dev.owner_id,
@@ -794,8 +803,9 @@ pub async fn delete_tunnel(
     ))
 }
 
-/// POST /api/tunnels/{id}/stop - drop the live session but KEEP the tunnel
-/// (status `stopped`, same subdomain/ports). Restart by re-running the agent.
+/// POST /api/tunnels/{id}/stop - pause the service host: drop the live session and mark
+/// it `stopped` so the agent stops serving it, KEEPING the tunnel (same subdomain/ports).
+/// Resume with `/start`.
 pub async fn stop_tunnel(
     State(state): State<SharedState>,
     user: AuthUser,
@@ -811,6 +821,25 @@ pub async fn stop_tunnel(
     }
     Ok(Json(
         json!({ "status": "tunnel_stopped", "tunnel_id": tunnel_id }),
+    ))
+}
+
+/// POST /api/tunnels/{id}/start - resume a paused service host. Clears the `stopped`
+/// status so the agent picks it back up on its next config poll (no agent restart).
+pub async fn start_tunnel(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path(tunnel_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    authorize_tunnel_owner(&state, &user, tunnel_id).await?;
+    let n = queries::start_tunnel_keep(&state.db.pg, tunnel_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if n == 0 {
+        return Err((StatusCode::CONFLICT, "service host is not paused".into()));
+    }
+    Ok(Json(
+        json!({ "status": "tunnel_started", "tunnel_id": tunnel_id }),
     ))
 }
 
@@ -956,12 +985,9 @@ pub async fn set_service_routes(
             "this tunnel has no host node yet".into(),
         ));
     };
-    if req.routes.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "a service must keep at least one route".into(),
-        ));
-    }
+    // An empty route set is allowed: it "parks" the service host at 0 ports (its dedicated
+    // public ports are freed) while keeping the row and its name. The owner can add ports
+    // back later. This is also what the idle-reclamation sweep produces.
     // Same per-tunnel policy as a fresh reservation: <=1 http, <=1 https, <=2 tcp, <=2 udp.
     if let Err(e) = check_route_policy(&req.routes) {
         return Err((StatusCode::BAD_REQUEST, e));

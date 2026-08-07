@@ -119,7 +119,11 @@ function nfCloseModal(id) { const m = document.getElementById(id); if (m) m.clas
 function nfWireModals() {
     document.querySelectorAll('[data-modal-open]').forEach(b => b.addEventListener('click', () => nfOpenModal(b.getAttribute('data-modal-open'))));
     document.querySelectorAll('[data-modal-close]').forEach(b => b.addEventListener('click', () => b.closest('.modal-overlay').classList.remove('open')));
-    document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); }));
+    document.querySelectorAll('.modal-overlay').forEach(o => {
+        let pressOnBackdrop = false;
+        o.addEventListener('mousedown', e => { pressOnBackdrop = e.target === o; });
+        o.addEventListener('click', e => { if (e.target === o && pressOnBackdrop) o.classList.remove('open'); });
+    });
 }
 
 // ---- Promise-based confirm / prompt (design-system modals; replace native confirm()/prompt()) ----
@@ -141,8 +145,12 @@ function nfConfirm({ title = 'Confirm', message = '', confirmText = 'Confirm', c
              </div>`;
         const done = v => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
         const onKey = e => { if (e.key === 'Escape') done(false); else if (e.key === 'Enter') done(true); };
+        // Only a click that BOTH starts and ends on the backdrop closes it, so a text
+        // selection that begins inside the modal and releases outside never dismisses it.
+        let pressOnBackdrop = false;
+        overlay.addEventListener('mousedown', e => { pressOnBackdrop = e.target === overlay; });
         overlay.addEventListener('click', e => {
-            if (e.target === overlay) return done(false);
+            if (e.target === overlay) { if (pressOnBackdrop) done(false); return; }
             const act = e.target.closest('[data-nf]');
             if (act) done(act.getAttribute('data-nf') === 'ok');
         });
@@ -203,8 +211,12 @@ function nfPrompt({ title = 'Edit', message = '', fields = [], confirmText = 'Sa
         const collect = () => { const o = {}; els.forEach(i => o[i.dataset.key] = i.value); return o; };
         const done = v => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
         const onKey = e => { if (e.key === 'Escape') done(null); else if (e.key === 'Enter' && e.target.tagName === 'INPUT') done(collect()); };
+        // Only a click that BOTH starts and ends on the backdrop closes it, so selecting
+        // text inside a field and releasing outside the modal never dismisses it.
+        let pressOnBackdrop = false;
+        overlay.addEventListener('mousedown', e => { pressOnBackdrop = e.target === overlay; });
         overlay.addEventListener('click', e => {
-            if (e.target === overlay) return done(null);
+            if (e.target === overlay) { if (pressOnBackdrop) done(null); return; }
             const act = e.target.closest('[data-nf]');
             if (act) done(act.getAttribute('data-nf') === 'ok' ? collect() : null);
         });

@@ -37,6 +37,10 @@ const RECONCILE_GRACE_SECS: i64 = 3600;
 /// A device is flipped offline once its agent has stopped polling for this long.
 const DEVICE_OFFLINE_GRACE_SECS: i64 = 45;
 
+/// A device service host that carries no traffic for this long has its dedicated public
+/// ports reclaimed (the service-host row + its name are kept). 31 days.
+const SERVICE_HOST_IDLE_SECS: i64 = 31 * 24 * 3600;
+
 /// Serve a clean, extensionless page URL from the views directory: "/" maps to the
 /// landing page and "/<name>" to `views/<name>.html`. The name is restricted to
 /// `[A-Za-z0-9_-]`, so a request can never traverse out of the views directory.
@@ -103,6 +107,18 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 {
                     tracing::warn!("device liveness sweep error: {e}");
+                }
+                match crate::db::queries::expire_idle_service_hosts(
+                    &st.db.pg,
+                    SERVICE_HOST_IDLE_SECS,
+                )
+                .await
+                {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("idle sweep reclaimed ports of {n} service host(s)")
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("idle service-host sweep error: {e}"),
                 }
             }
         });

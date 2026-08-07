@@ -46,6 +46,10 @@ pub fn api_router(state: SharedState) -> Router {
         )
         .route("/api/tunnels/{tunnel_id}/stop", post(tunnels::stop_tunnel))
         .route(
+            "/api/tunnels/{tunnel_id}/start",
+            post(tunnels::start_tunnel),
+        )
+        .route(
             "/api/tunnels/{tunnel_id}/bandwidth",
             get(tunnels::tunnel_bandwidth),
         )

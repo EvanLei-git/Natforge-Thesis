@@ -169,13 +169,74 @@ async fn serve_http(state: Arc<CoreState>, mut inbound: TcpStream, peer: SocketA
         }
     };
     match handle {
-        Some(h) => splice_to_route(state, inbound, peer, buf, h, RouteMode::Http).await,
+        Some(h) => {
+            let head = with_forwarded_headers(
+                &mut inbound,
+                buf,
+                peer,
+                &hostname,
+                "http",
+                state.config.max_header_bytes,
+            )
+            .await;
+            splice_to_route(state, inbound, peer, head, h, RouteMode::Http).await
+        }
         None => {
             let _ = inbound
                 .write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 18\r\n\r\nunknown tunnel host")
                 .await;
         }
     }
+}
+
+/// Add `X-Forwarded-{For,Host,Proto}` to the first HTTP request head so the origin app
+/// sees the real client IP and the scheme it was reached by (e.g. generates https URLs).
+/// Reads the rest of the head from `stream` into `head`, strips any client-supplied
+/// `X-Forwarded-*` (they'd be spoofed - the client dials us directly), inserts ours
+/// before the blank line, and returns the rewritten head to replay to the origin.
+/// Best-effort: on any incomplete/non-UTF8 head it returns the bytes unchanged, so a
+/// request is never corrupted. Only the first request on a connection is rewritten.
+async fn with_forwarded_headers<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    mut head: Vec<u8>,
+    peer: SocketAddr,
+    host: &str,
+    scheme: &str,
+    max_bytes: usize,
+) -> Vec<u8> {
+    let mut tmp = [0u8; 2048];
+    while find_subsequence(&head, b"\r\n\r\n").is_none() && head.len() < max_bytes {
+        match stream.read(&mut tmp).await {
+            Ok(0) | Err(_) => return head,
+            Ok(n) => head.extend_from_slice(&tmp[..n]),
+        }
+    }
+    let Some(end) = find_subsequence(&head, b"\r\n\r\n") else {
+        return head;
+    };
+    let Ok(text) = std::str::from_utf8(&head[..end]) else {
+        return head;
+    };
+    let mut out = Vec::with_capacity(head.len() + 160);
+    for line in text
+        .split("\r\n")
+        .filter(|l| !l.to_ascii_lowercase().starts_with("x-forwarded-"))
+    {
+        out.extend_from_slice(line.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(
+        format!(
+            "X-Forwarded-For: {}\r\nX-Forwarded-Proto: {}\r\nX-Forwarded-Host: {}\r\n",
+            peer.ip(),
+            scheme,
+            host
+        )
+        .as_bytes(),
+    );
+    out.extend_from_slice(b"\r\n"); // end of headers
+    out.extend_from_slice(&head[end + 4..]); // any body bytes already read
+    out
 }
 
 /// Forward a plain-HTTP connection (the apex / www host) to the local dashboard
@@ -327,7 +388,18 @@ async fn serve_https(state: Arc<CoreState>, mut inbound: TcpStream, peer: Socket
     if let Some((acceptor, h)) = terminate {
         let prefixed = PrefixedStream::new(buf, inbound);
         match acceptor.accept(prefixed).await {
-            Ok(tls) => splice_to_route(state, tls, peer, Vec::new(), h, RouteMode::Http).await,
+            Ok(mut tls) => {
+                let head = with_forwarded_headers(
+                    &mut tls,
+                    Vec::new(),
+                    peer,
+                    &sni_host,
+                    "https",
+                    state.config.max_header_bytes,
+                )
+                .await;
+                splice_to_route(state, tls, peer, head, h, RouteMode::Http).await
+            }
             Err(e) => warn!("TLS termination failed for '{sni_host}': {e}"),
         }
     }

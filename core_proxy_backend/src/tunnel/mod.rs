@@ -77,6 +77,17 @@ pub async fn run_control_plane(state: Arc<CoreState>) -> anyhow::Result<()> {
                 continue;
             }
         };
+        // TCP keepalive so an ungracefully-dropped agent connection (crash, kill, sleep,
+        // network loss) is detected in ~50s and the yamux driver ends, letting the tunnel
+        // tear down and free its public ports. Without it the socket (and its bound
+        // tcp/udp ports) can leak until the core restarts.
+        {
+            let ka = socket2::TcpKeepalive::new()
+                .with_time(std::time::Duration::from_secs(20))
+                .with_interval(std::time::Duration::from_secs(10))
+                .with_retries(3);
+            let _ = socket2::SockRef::from(&socket).set_tcp_keepalive(&ka);
+        }
         let st = state.clone();
         tokio::spawn(async move {
             // Establish TLS before anything else: the whole yamux session (and every

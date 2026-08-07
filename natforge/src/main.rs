@@ -75,6 +75,13 @@ enum Mode {
         #[arg(short, long)]
         tunnel_server: Option<String>,
     },
+
+    /// Install the agent as a background service (systemd user unit) that starts on
+    /// boot and auto-restarts. Run `natforge enroll` first, then this.
+    InstallService,
+
+    /// Remove the background service installed by `install-service`.
+    UninstallService,
 }
 
 fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteSpec>> {
@@ -108,6 +115,66 @@ fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteS
         ));
     }
     Ok(out)
+}
+
+/// Path to the per-user systemd unit for the agent.
+fn service_unit_path() -> Result<std::path::PathBuf> {
+    let home = std::env::var("HOME").map_err(|_| anyhow!("HOME is not set"))?;
+    Ok(std::path::PathBuf::from(home).join(".config/systemd/user/natforge.service"))
+}
+
+/// Run a command, failing with a clear message (e.g. if systemd is not installed).
+fn sh(cmd: &str, args: &[&str]) -> Result<()> {
+    let status = std::process::Command::new(cmd)
+        .args(args)
+        .status()
+        .map_err(|e| anyhow!("could not run `{cmd}` ({e}); is systemd installed?"))?;
+    if !status.success() {
+        return Err(anyhow!("`{cmd} {}` failed ({status})", args.join(" ")));
+    }
+    Ok(())
+}
+
+/// Install a systemd *user* service that runs `natforge run` on boot, auto-restarting,
+/// with linger enabled so it survives logout and reboot. Needs no root.
+fn install_service() -> Result<()> {
+    let exe = std::env::current_exe()?;
+    let path = service_unit_path()?;
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let unit = format!(
+        "[Unit]\nDescription=NatForge agent\n\n[Service]\nExecStart={} run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n",
+        exe.display()
+    );
+    std::fs::write(&path, unit)?;
+    sh("systemctl", &["--user", "daemon-reload"])?;
+    sh(
+        "systemctl",
+        &["--user", "enable", "--now", "natforge.service"],
+    )?;
+    if sh("loginctl", &["enable-linger"]).is_err() {
+        eprintln!(
+            "note: could not enable linger automatically; run `loginctl enable-linger` so the agent survives a reboot."
+        );
+    }
+    println!("Installed. The NatForge agent now runs in the background and starts on boot.");
+    println!("  status: systemctl --user status natforge");
+    println!("  logs:   journalctl --user -u natforge -f");
+    println!("  (run `natforge enroll` first if you have not, so the agent has a device token)");
+    Ok(())
+}
+
+/// Stop and remove the service installed by `install_service`.
+fn uninstall_service() -> Result<()> {
+    let _ = sh(
+        "systemctl",
+        &["--user", "disable", "--now", "natforge.service"],
+    );
+    if let Ok(path) = service_unit_path() {
+        let _ = std::fs::remove_file(path);
+    }
+    let _ = sh("systemctl", &["--user", "daemon-reload"]);
+    println!("Removed the NatForge background service.");
+    Ok(())
 }
 
 #[tokio::main]
@@ -171,6 +238,8 @@ async fn main() -> Result<()> {
                 error!("device run stopped: {e}");
             }
         }
+        Mode::InstallService => install_service()?,
+        Mode::UninstallService => uninstall_service()?,
     }
     Ok(())
 }

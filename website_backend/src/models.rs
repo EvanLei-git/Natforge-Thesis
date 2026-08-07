@@ -153,6 +153,9 @@ pub struct TunnelView {
     pub bytes_in: i64,
     pub bytes_out: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Last time this service host carried real traffic (in or out). Drives the client
+    /// idle countdown; None until the first byte flows (client falls back to created_at).
+    pub last_active_at: Option<chrono::DateTime<chrono::Utc>>,
     pub routes: Vec<RouteView>,
 }
 
