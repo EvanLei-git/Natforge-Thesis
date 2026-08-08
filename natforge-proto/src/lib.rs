@@ -114,6 +114,11 @@ pub struct RouteClaim {
     pub host: Option<String>,
     /// Some(pool port) for tcp; None for http/https.
     pub public_port: Option<u16>,
+    /// Optional SRV service label (e.g. "minecraft"); when set, the data plane
+    /// provisions `_<service>._<proto>.<subdomain>`. `#[serde(default)]` keeps older
+    /// tokens (issued before this field) deserializing as `None`.
+    #[serde(default)]
+    pub srv_service: Option<String>,
 }
 
 /// The full set of claims carried by a tunnel token.
@@ -387,12 +392,14 @@ mod tests {
                     mode: RouteMode::Http,
                     host: Some("x.n.com".into()),
                     public_port: None,
+                    srv_service: None,
                 },
                 RouteClaim {
                     route_id: 2,
                     mode: RouteMode::Tcp,
                     host: None,
                     public_port: Some(20001),
+                    srv_service: None,
                 },
             ],
             custom_domain: None,
@@ -411,6 +418,7 @@ mod tests {
                 mode: RouteMode::Tcp,
                 host: Some("x".into()),
                 public_port: None,
+                srv_service: None,
             }],
             custom_domain: None,
             exp: 9999999999,

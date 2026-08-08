@@ -112,6 +112,7 @@ struct PlannedRoute {
     mode: RouteMode,
     public_port: Option<u16>, // tcp only
     public_endpoint: String,
+    srv_service: Option<String>, // opt-in SRV label (tcp/udp routes only)
 }
 
 async fn handle_agent<S>(
@@ -223,6 +224,7 @@ where
             mode: r.mode,
             public_port: r.public_port,
             public_endpoint: endpoint,
+            srv_service: r.srv_service.clone(),
         });
     }
 
@@ -257,6 +259,7 @@ where
     let mut has_http = false;
     let mut has_https = false;
     let mut listener_handles = Vec::new();
+    let mut srv_records: Vec<(String, String)> = Vec::new(); // (service, proto) for teardown
 
     // 5. Register routes + spawn tcp/udp listeners.
     for p in &planned {
@@ -334,16 +337,29 @@ where
             // the bind pass above), so no PlannedRoute is ever Both.
             RouteMode::Both => {}
         }
-        // Per-tunnel DNS only for tcp routes: provision an SRV so players can use
-        // <sub>.<domain> instead of host:port. http/https are covered by the wildcard
-        // A record; udp clients connect by host:port directly.
-        if p.mode == RouteMode::Tcp
-            && let Some(port) = p.public_port
-        {
-            CloudflareManager::from_config(cfg)
-                .provision_srv(&state.http, &subdomain, &cfg.public_host, port)
+        // Opt-in SRV: only routes the owner labelled get a `_<service>._<proto>.<sub>`
+        // record (proto from the transport), so SRV-aware clients (Minecraft `_minecraft`,
+        // Mindustry `_mindustry`, ...) can connect by hostname. Unlabelled routes get none.
+        if let (Some(service), Some(port)) = (p.srv_service.as_deref(), p.public_port) {
+            let proto = if p.mode == RouteMode::Udp {
+                "udp"
+            } else {
+                "tcp"
+            };
+            if let Err(e) = CloudflareManager::from_config(cfg)
+                .provision_srv(
+                    &state.http,
+                    service,
+                    proto,
+                    &subdomain,
+                    &cfg.public_host,
+                    port,
+                )
                 .await
-                .ok();
+            {
+                warn!("SRV provision failed for _{service}._{proto}.{subdomain}: {e}");
+            }
+            srv_records.push((service.to_string(), proto.to_string()));
         }
     }
 
@@ -365,6 +381,7 @@ where
             public_ports: public_ports.clone(),
             udp_ports: udp_ports.clone(),
             custom_domain: custom_domain.clone(),
+            srv_records: srv_records.clone(),
             has_http,
             has_https,
             stats: stats.clone(),
@@ -436,11 +453,14 @@ pub(crate) async fn teardown(
     udp_ports: &[u16],
     custom_domain: Option<&str>,
 ) {
-    if let Some(t) = state.tunnels.write().await.remove(subdomain) {
+    let srv_records = if let Some(t) = state.tunnels.write().await.remove(subdomain) {
         for jh in t.listener_handles {
             jh.abort();
         }
-    }
+        t.srv_records
+    } else {
+        Vec::new()
+    };
     {
         let mut http = state.http_routes.write().await;
         if http.get(subdomain).map(|h| h.tunnel_id) == Some(tunnel_id) {
@@ -480,12 +500,20 @@ pub(crate) async fn teardown(
             cs.remove(cd);
         }
     }
-    // Remove the per-tunnel SRV record(s) if this tunnel had any tcp routes.
-    if !ports.is_empty() {
-        CloudflareManager::from_config(&state.config)
-            .remove_srv(&state.http, subdomain, &state.config.public_host)
+    // Remove the opt-in SRV records this tunnel provisioned.
+    for (service, proto) in &srv_records {
+        if let Err(e) = CloudflareManager::from_config(&state.config)
+            .remove_srv(
+                &state.http,
+                service,
+                proto,
+                subdomain,
+                &state.config.public_host,
+            )
             .await
-            .ok();
+        {
+            warn!("SRV remove failed for _{service}._{proto}.{subdomain}: {e}");
+        }
     }
 }
 

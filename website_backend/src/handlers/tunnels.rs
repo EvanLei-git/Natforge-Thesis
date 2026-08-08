@@ -145,11 +145,12 @@ fn expand_route(
         let ep = endpoint(RouteMode::Tcp, subdomain, host, r.public_port);
         let tcp_id = r.route_id as u16;
         let udp_id = tcp_id.wrapping_add(BOTH_UDP_ROUTE_OFFSET);
-        let claim = |route_id, mode| RouteClaim {
+        let claim = |route_id, mode, srv: Option<String>| RouteClaim {
             route_id,
             mode,
             host: None,
             public_port: port_u16,
+            srv_service: srv,
         };
         let view = |route_id, mode: &str| ReservedRoute {
             route_id,
@@ -158,8 +159,13 @@ fn expand_route(
             public_endpoint: ep.clone(),
             label: r.label.clone(),
         };
+        // Only the tcp half carries the SRV label, so a `both` route yields one
+        // `_<service>._tcp` record (the form the SRV-aware game clients query).
         return (
-            vec![claim(tcp_id, RouteMode::Tcp), claim(udp_id, RouteMode::Udp)],
+            vec![
+                claim(tcp_id, RouteMode::Tcp, r.srv_service.clone()),
+                claim(udp_id, RouteMode::Udp, None),
+            ],
             vec![view(tcp_id, "tcp"), view(udp_id, "udp")],
         );
     }
@@ -180,6 +186,12 @@ fn expand_route(
             mode,
             host: route_host,
             public_port,
+            // SRV only applies to dedicated-port (tcp/udp) routes, not host-routed http/https.
+            srv_service: if mode.is_host_routed() {
+                None
+            } else {
+                r.srv_service.clone()
+            },
         }],
         vec![ReservedRoute {
             route_id: r.route_id as u16,
@@ -380,6 +392,7 @@ fn build_reservation(
     t: &TunnelRow,
     routes: &[RouteRow],
     node: &Node,
+    custom_domain: Option<String>,
 ) -> TunnelRequestRes {
     let host = &t.public_host;
     let mut claims = Vec::new();
@@ -389,7 +402,16 @@ fn build_reservation(
         claims.extend(c);
         views.extend(v);
     }
-    let token = issue_tunnel_token(secret, owner_id, t.id, &t.subdomain, claims, None);
+    // The custom domain rides the signed token so the node registers it and issues its
+    // cert; omitting it (the old bug) left device service hosts unreachable by custom name.
+    let token = issue_tunnel_token(
+        secret,
+        owner_id,
+        t.id,
+        &t.subdomain,
+        claims,
+        custom_domain.clone(),
+    );
     TunnelRequestRes {
         full_host: format!("{}.{}", t.subdomain, host),
         tunnel_id: t.id,
@@ -401,7 +423,7 @@ fn build_reservation(
         region: node.region.clone(),
         node_id: node.node_id.clone(),
         control_cert_fingerprint: node.control_cert_fp.clone(),
-        custom_domain: None,
+        custom_domain,
     }
 }
 
@@ -441,12 +463,16 @@ pub async fn device_config(
         if routes.is_empty() {
             continue;
         }
+        let custom_domain = queries::tunnel_custom_domain(&state.db.pg, t.id)
+            .await
+            .map_err(db_err)?;
         out.push(build_reservation(
             &state.config.jwt_secret,
             dev.owner_id,
             t,
             &routes,
             &node,
+            custom_domain,
         ));
     }
     Ok(Json(out))
@@ -510,7 +536,7 @@ pub async fn tunnel_logs(
     Path(tunnel_id): Path<i64>,
 ) -> Result<Json<Vec<crate::models::ConnLog>>, (StatusCode, String)> {
     authorize_tunnel(&state, &user, tunnel_id).await?;
-    let logs = queries::recent_conn_logs(&state.db.pg, tunnel_id, 200)
+    let logs = queries::recent_conn_logs(&state.db.pg, tunnel_id, 20)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(logs))
@@ -800,6 +826,56 @@ pub async fn delete_tunnel(
     }
     Ok(Json(
         json!({ "status": "tunnel_deleted", "tunnel_id": tunnel_id }),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct SetRouteSrvReq {
+    /// SRV service label (e.g. "minecraft"); empty/null clears it (no record).
+    #[serde(default)]
+    pub service: Option<String>,
+}
+
+/// POST /api/tunnels/{id}/routes/{route_id}/srv - set/clear a route's SRV service label.
+/// The data plane provisions `_<service>._<proto>.<subdomain>` on the agent's next
+/// reconnect (triggered here); an empty service removes it.
+pub async fn set_route_srv(
+    State(state): State<SharedState>,
+    user: AuthUser,
+    Path((tunnel_id, route_id)): Path<(i64, i32)>,
+    Json(req): Json<SetRouteSrvReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (subdomain, node_id) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
+    // Normalize: lowercase DNS-safe label (letters/digits/hyphen), no leading underscore,
+    // max 30 chars; empty clears it. The '_' prefix and proto are added at provision time.
+    let service: Option<String> = req.service.as_deref().map(str::trim).and_then(|s| {
+        let s: String = s
+            .trim_start_matches('_')
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .take(30)
+            .collect();
+        if s.is_empty() { None } else { Some(s) }
+    });
+    let n = queries::set_route_srv(&state.db.pg, tunnel_id, route_id as i16, service.as_deref())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if n == 0 {
+        return Err((StatusCode::NOT_FOUND, "route not found".into()));
+    }
+    // Re-handshake the live tunnel so the node re-reads claims and (re)provisions DNS.
+    if queries::tunnel_status(&state.db.pg, tunnel_id)
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("online")
+    {
+        signal_node_stop(&state, &subdomain, &node_id).await;
+    }
+    Ok(Json(
+        json!({ "status": "route_srv_set", "tunnel_id": tunnel_id, "route_id": route_id, "service": service }),
     ))
 }
 

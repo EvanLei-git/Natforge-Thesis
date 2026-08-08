@@ -83,6 +83,14 @@ function fmtAgo(iso) {
     return `${Math.floor(s / 86400)}d ago`;
 }
 
+// Absolute timestamp as DD/MM/YYYY HH:MM:SS (Greek/EU order), in the viewer's local time.
+function fmtDateTime(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '-';
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 // Paint a range input's filled portion in the brand colour (cross-browser).
 function nfSlider(el) {
     if (!el) return;

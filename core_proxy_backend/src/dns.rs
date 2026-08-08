@@ -15,9 +15,6 @@ use tracing::{info, warn};
 
 use crate::config::Config;
 
-const SERVICE: &str = "_minecraft";
-const PROTO: &str = "_tcp";
-
 pub struct CloudflareManager {
     api_token: String,
     zone_id: String,
@@ -35,42 +32,54 @@ impl CloudflareManager {
         self.api_token == "mock_token" || self.api_token.is_empty()
     }
 
-    fn srv_name(subdomain: &str, domain: &str) -> String {
-        format!("{SERVICE}.{PROTO}.{subdomain}.{domain}")
+    /// SRV record name, e.g. service="minecraft", proto="tcp" -> `_minecraft._tcp.<sub>.<domain>`.
+    fn srv_name(service: &str, proto: &str, subdomain: &str, domain: &str) -> String {
+        format!("_{service}._{proto}.{subdomain}.{domain}")
     }
 
-    /// Provision an SRV record for a tcp route. `target`/host is `<subdomain>.<domain>`
-    /// (covered by the wildcard A record), and `port` is the allocated public port.
+    /// Provision an SRV record for a labelled tcp/udp route. `target`/host is
+    /// `<subdomain>.<domain>` (covered by the wildcard A record), `port` is the allocated
+    /// public port, and `service`/`proto` form the `_<service>._<proto>` prefix.
     pub async fn provision_srv(
         &self,
         http: &reqwest::Client,
+        service: &str,
+        proto: &str,
         subdomain: &str,
         domain: &str,
         port: u16,
     ) -> Result<(), String> {
         let fqdn = format!("{subdomain}.{domain}");
+        let name = Self::srv_name(service, proto, subdomain, domain);
         if self.is_mock() {
             info!(
-                "(Cloudflare mock) zone {}: SRV {SERVICE}.{PROTO}.{fqdn} -> {fqdn}:{port}",
+                "(Cloudflare mock) zone {}: SRV {name} -> {fqdn}:{port}",
                 self.zone_id
             );
             return Ok(());
         }
+        // Idempotent: drop any existing record of this name first (stale port, a prior
+        // session, or a manually-created one), then create fresh.
+        let _ = self
+            .remove_srv(http, service, proto, subdomain, domain)
+            .await;
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{}/dns_records",
             self.zone_id
         );
+        // Cloudflare wants the full record name at the top level and only the numeric
+        // fields + target in `data`; the nested service/proto form is rejected (9000).
         let body = json!({
             "type": "SRV",
+            "name": name,
             "ttl": 1, // 1 = automatic
             "data": {
-                "service": SERVICE, "proto": PROTO, "name": fqdn,
                 "priority": 0, "weight": 5, "port": port, "target": fqdn
             }
         });
         let v = self.send(http.post(&url).json(&body)).await?;
         if v["success"].as_bool() == Some(true) {
-            info!("(Cloudflare) provisioned SRV {SERVICE}.{PROTO}.{fqdn} -> {fqdn}:{port}");
+            info!("(Cloudflare) provisioned SRV {name} -> {fqdn}:{port}");
             Ok(())
         } else {
             Err(format!("cloudflare SRV create failed: {}", v["errors"]))
@@ -81,10 +90,12 @@ impl CloudflareManager {
     pub async fn remove_srv(
         &self,
         http: &reqwest::Client,
+        service: &str,
+        proto: &str,
         subdomain: &str,
         domain: &str,
     ) -> Result<(), String> {
-        let name = Self::srv_name(subdomain, domain);
+        let name = Self::srv_name(service, proto, subdomain, domain);
         if self.is_mock() {
             info!("(Cloudflare mock) zone {}: delete SRV {name}", self.zone_id);
             return Ok(());

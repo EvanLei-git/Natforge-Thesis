@@ -145,7 +145,16 @@
             const rm = t
                 ? `<button class="btn btn-danger btn-icon btn-sm" title="Remove this port" style="margin-left:auto" onclick="removeServicePort(${t.tunnel_id}, ${r.route_id})">${nfIcon('trash')}</button>`
                 : '';
-            return `<div class="route-line" style="align-items:center">${label}<span class="badge ${r.mode}">${r.mode}</span> ${ep} <span class="faint small">&larr; :${r.local_port}</span>${rm}</div>`;
+            // Opt-in SRV: only dedicated-port routes (tcp/udp/both) can have one. `both`
+            // and tcp use _tcp; udp uses _udp. Shows the current record or a "+ SRV" button.
+            let srv = '';
+            if (t && (r.mode === 'tcp' || r.mode === 'udp' || r.mode === 'both')) {
+                const proto = r.mode === 'udp' ? 'udp' : 'tcp';
+                srv = r.srv_service
+                    ? `<button class="badge tag" style="margin-left:6px; cursor:pointer" title="SRV record active. Click to change or remove." onclick="setRouteSrv(${t.tunnel_id}, ${r.route_id}, ${escapeAttr(r.srv_service)})">SRV _${escapeHtml(r.srv_service)}._${proto}</button>`
+                    : `<button class="btn btn-secondary btn-sm" style="margin-left:6px" title="Add a DNS SRV record so SRV-aware clients (Minecraft, Mindustry) connect without a port" onclick="setRouteSrv(${t.tunnel_id}, ${r.route_id}, '')">+ SRV</button>`;
+            }
+            return `<div class="route-line" style="align-items:center">${label}<span class="badge ${r.mode}">${r.mode}</span> ${ep} <span class="faint small">&larr; :${r.local_port}</span>${srv}${rm}</div>`;
         }
 
         // Idle-reclamation countdown: a service host with no traffic for 31 days has its
@@ -442,7 +451,7 @@
                 const body = document.getElementById(`svc-${id}-conns`);
                 if (!body) return;
                 body.innerHTML = logs.length ? logs.map(l => {
-                    const when = new Date(l.created_at).toLocaleString();
+                    const when = fmtDateTime(l.created_at);
                     const cc = l.country ? `<span class="badge tag">${escapeHtml(l.country)}</span>` : '<span class="faint small">-</span>';
                     const blocked = l.blocked ? '<span class="badge offline" style="margin-left:6px">blocked</span>' : '';
                     const held = l.duration_ms >= 1000 ? `${(l.duration_ms/1000).toFixed(1)}s` : `${l.duration_ms}ms`;
@@ -475,12 +484,18 @@
 
         // Stop: drop the live session but KEEP the tunnel (status 'stopped', restartable).
         async function stopTunnel(id) {
-            try { await API.stopTunnel(id); toast('Service paused. Press Start to resume.', 'success'); loadTunnels(); }
+            const t = tunnelsCache.find(x => x.tunnel_id === id);
+            if (t) { t.status = 'stopped'; renderMain(); }   // optimistic: flip the button now
+            try { await API.stopTunnel(id); toast('Service paused. Press Start to resume.', 'success'); }
             catch (err) { toast(err.message, 'danger'); }
+            loadTunnels();
         }
         async function startTunnel(id) {
-            try { await API.startTunnel(id); toast('Resuming... it serves again within a few seconds.', 'success'); loadTunnels(); }
+            const t = tunnelsCache.find(x => x.tunnel_id === id);
+            if (t) { t.status = 'awaiting_agent'; renderMain(); }
+            try { await API.startTunnel(id); toast('Resuming... it serves again within a few seconds.', 'success'); }
             catch (err) { toast(err.message, 'danger'); }
+            loadTunnels();
         }
         // Delete: remove the tunnel and free its ports.
         async function deleteTunnel(id) {
@@ -611,6 +626,14 @@
                 loadTunnels();
             } catch (err) { toast(err.message, 'danger'); }
         });
+        async function setRouteSrv(tunnelId, routeId, current) {
+            const res = await nfPrompt({ title: 'DNS SRV record', confirmText: 'Save',
+                message: 'For SRV-aware games, players connect with just the hostname, no port. Enter the SRV service for your game (e.g. minecraft, mindustry). Leave blank to remove. Only works once a Cloudflare token is configured.',
+                fields: [{ key: 'service', label: 'SRV service', hint: '(e.g. minecraft, mindustry; blank = none)', value: current || '', placeholder: 'minecraft' }] });
+            if (res === null) return;
+            try { await API.setRouteSrv(tunnelId, routeId, (res.service || '').trim()); toast('SRV record updated', 'success'); loadTunnels(); }
+            catch (err) { toast(err.message, 'danger'); }
+        }
         async function removeServicePort(tunnelId, routeId) {
             const t = tunnelsCache.find(x => x.tunnel_id === tunnelId);
             if (!t) return;

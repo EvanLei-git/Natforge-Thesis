@@ -57,6 +57,8 @@ pub struct RouteRow {
     pub local_port: i32,
     pub public_port: Option<i32>,
     pub label: Option<String>,
+    /// Optional SRV service label; when set, the data plane provisions a DNS SRV record.
+    pub srv_service: Option<String>,
 }
 
 /// `nodes` row - a data-plane VM / region.
@@ -128,6 +130,8 @@ pub struct RouteView {
     pub public_port: Option<i32>,
     pub public_endpoint: String,
     pub label: Option<String>,
+    /// Optional SRV service label the owner set on this route (e.g. "minecraft").
+    pub srv_service: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

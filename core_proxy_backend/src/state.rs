@@ -62,6 +62,8 @@ pub struct ActiveTunnel {
     pub udp_ports: Vec<u16>,
     /// Custom hostname fronting this tunnel, if any (for registry cleanup).
     pub custom_domain: Option<String>,
+    /// SRV records provisioned for this tunnel, as (service, proto), to remove on teardown.
+    pub srv_records: Vec<(String, String)>,
     /// Whether this tunnel registered http / https on its subdomain.
     pub has_http: bool,
     pub has_https: bool,

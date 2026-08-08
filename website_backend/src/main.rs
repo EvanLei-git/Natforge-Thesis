@@ -41,6 +41,9 @@ const DEVICE_OFFLINE_GRACE_SECS: i64 = 45;
 /// ports reclaimed (the service-host row + its name are kept). 31 days.
 const SERVICE_HOST_IDLE_SECS: i64 = 31 * 24 * 3600;
 
+/// Connection-log rows kept per tunnel; older rows are pruned by the periodic sweep.
+const CONN_LOG_KEEP_PER_TUNNEL: i64 = 2000;
+
 /// Serve a clean, extensionless page URL from the views directory: "/" maps to the
 /// landing page and "/<name>" to `views/<name>.html`. The name is restricted to
 /// `[A-Za-z0-9_-]`, so a request can never traverse out of the views directory.
@@ -119,6 +122,11 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!("idle service-host sweep error: {e}"),
+                }
+                if let Err(e) =
+                    crate::db::queries::prune_conn_logs(&st.db.pg, CONN_LOG_KEEP_PER_TUNNEL).await
+                {
+                    tracing::warn!("connection-log prune error: {e}");
                 }
             }
         });

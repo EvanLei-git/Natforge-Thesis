@@ -84,6 +84,7 @@ class NatForgeAPI {
     editTunnel(tunnelId, body)   { return this._req('PATCH', `/tunnels/${encodeURIComponent(tunnelId)}`, body); }
     // Reconcile a service's exposed ports in place. routes: [{ mode, local_port, label? }].
     setServiceRoutes(tunnelId, routes) { return this._req('PUT', `/tunnels/${encodeURIComponent(tunnelId)}/routes`, { routes }); }
+    setRouteSrv(tunnelId, routeId, service) { return this._req('POST', `/tunnels/${encodeURIComponent(tunnelId)}/routes/${encodeURIComponent(routeId)}/srv`, { service: service || null }); }
     getRegions()          { return this._req('GET', '/regions'); }
     getTunnelBandwidth(id){ return this._req('GET', `/tunnels/${encodeURIComponent(id)}/bandwidth`); }
     getTunnelLogs(id)     { return this._req('GET', `/tunnels/${encodeURIComponent(id)}/logs`); }

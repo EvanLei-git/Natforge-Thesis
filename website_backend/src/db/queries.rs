@@ -175,10 +175,28 @@ pub async fn device_service_tunnels(pg: &PgPool, device_id: i64) -> anyhow::Resu
     .await?)
 }
 
+/// Set (or clear, with None) a route's optional SRV service label. The change takes
+/// effect on the agent's next reconnect, which the caller triggers.
+pub async fn set_route_srv(
+    pg: &PgPool,
+    tunnel_id: i64,
+    route_id: i16,
+    srv: Option<&str>,
+) -> anyhow::Result<u64> {
+    let r =
+        sqlx::query("UPDATE routes SET srv_service = $1 WHERE tunnel_id = $2 AND route_id = $3")
+            .bind(srv)
+            .bind(tunnel_id)
+            .bind(route_id)
+            .execute(pg)
+            .await?;
+    Ok(r.rows_affected())
+}
+
 /// Load a tunnel's routes (non-transactional; used to build a device's config).
 pub async fn routes_for_tunnel(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<Vec<RouteRow>> {
     Ok(sqlx::query_as::<_, RouteRow>(
-        "SELECT id, tunnel_id, route_id, kind, local_port, public_port, label
+        "SELECT id, tunnel_id, route_id, kind, local_port, public_port, label, srv_service
          FROM routes WHERE tunnel_id = $1 ORDER BY route_id",
     )
     .bind(tunnel_id)
@@ -258,7 +276,7 @@ async fn load_routes(
     tunnel_id: i64,
 ) -> anyhow::Result<Vec<RouteRow>> {
     Ok(sqlx::query_as::<_, RouteRow>(
-        "SELECT id, tunnel_id, route_id, kind, local_port, public_port, label
+        "SELECT id, tunnel_id, route_id, kind, local_port, public_port, label, srv_service
          FROM routes WHERE tunnel_id = $1 ORDER BY route_id",
     )
     .bind(tunnel_id)
@@ -274,6 +292,18 @@ async fn load_custom_domain(
         .bind(tunnel_id)
         .fetch_one(&mut **tx)
         .await
+}
+
+/// A tunnel's custom domain (pool-based), used to build the device-config token so a
+/// device service host actually advertises its custom hostname to the node.
+pub async fn tunnel_custom_domain(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<Option<String>> {
+    Ok(
+        sqlx::query_scalar::<_, Option<String>>("SELECT custom_domain FROM tunnels WHERE id = $1")
+            .bind(tunnel_id)
+            .fetch_optional(pg)
+            .await?
+            .flatten(),
+    )
 }
 
 /// Set (or clear, with `None`) a tunnel's custom domain. A duplicate hostname trips
@@ -751,6 +781,7 @@ pub async fn reserve_tunnel(
             local_port: *local_port as i32,
             public_port,
             label,
+            srv_service: None,
         });
     }
 
@@ -784,7 +815,7 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
     let mut views = Vec::with_capacity(tunnels.len());
     for t in tunnels {
         let routes = sqlx::query_as::<_, RouteRow>(
-            "SELECT id, tunnel_id, route_id, kind, local_port, public_port, label
+            "SELECT id, tunnel_id, route_id, kind, local_port, public_port, label, srv_service
              FROM routes WHERE tunnel_id = $1 ORDER BY route_id",
         )
         .bind(t.id)
@@ -823,7 +854,8 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
                 local_port: r.local_port,
                 public_port: r.public_port,
                 public_endpoint: route_endpoint(&r.kind, &t.subdomain, &host, r.public_port),
-                label: r.label,
+                label: r.label.clone(),
+                srv_service: r.srv_service,
             })
             .collect();
         let owner = user_by_id(pg, t.owner_id).await?;
@@ -926,10 +958,15 @@ pub async fn users_overview(pg: &PgPool) -> anyhow::Result<Vec<crate::models::Us
 }
 
 pub async fn set_tunnel_offline(pg: &PgPool, tunnel_id: i64) -> anyhow::Result<()> {
-    sqlx::query("UPDATE tunnels SET status='offline', last_seen=now() WHERE id=$1")
-        .bind(tunnel_id)
-        .execute(pg)
-        .await?;
+    // Never clobber a deliberately-paused ('stopped') tunnel: pressing Stop both marks it
+    // stopped and drops the node session, whose `tunnel_down` callback lands here; without
+    // this guard it would race the pause back to 'offline' and the agent would re-serve it.
+    sqlx::query(
+        "UPDATE tunnels SET status='offline', last_seen=now() WHERE id=$1 AND status <> 'stopped'",
+    )
+    .bind(tunnel_id)
+    .execute(pg)
+    .await?;
     Ok(())
 }
 
@@ -1212,6 +1249,23 @@ pub async fn insert_conn_log(
     .execute(pg)
     .await?;
     Ok(())
+}
+
+/// Prune connection logs to the newest `keep` rows per tunnel, bounding table growth.
+/// Runs in the periodic sweep; cheap when little data exists.
+pub async fn prune_conn_logs(pg: &PgPool, keep: i64) -> anyhow::Result<u64> {
+    let r = sqlx::query(
+        "DELETE FROM connection_logs WHERE id IN (
+             SELECT id FROM (
+                 SELECT id, row_number() OVER (PARTITION BY tunnel_id ORDER BY id DESC) AS rn
+                 FROM connection_logs
+             ) t WHERE rn > $1
+         )",
+    )
+    .bind(keep)
+    .execute(pg)
+    .await?;
+    Ok(r.rows_affected())
 }
 
 /// Recent connection-log rows for one tunnel (newest first, capped).
