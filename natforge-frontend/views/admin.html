@@ -55,7 +55,7 @@
             <div class="card">
                 <div class="card-head"><h5>Regions (data-plane nodes)</h5></div>
                 <div class="card-body">
-                    <p class="muted small">Each region is a data-plane VM running <code>core_proxy_backend</code>. A node self-registers on boot with its own wildcard host + public TCP port pool; rename it, set a human region label, toggle whether users may place new tunnels there, or remove a decommissioned node. To add a region (e.g. a VM in Bulgaria), deploy a core there with a unique <code>NODE_ID</code>, a <code>PUBLIC_HOST</code> like <code>bg.natforge.com</code>, a reachable <code>CONTROL_ENDPOINT</code> / <code>INTERNAL_URL</code>, and point <code>WEBSITE_URL</code> here - it appears below automatically.</p>
+                    <p class="muted small">Each region is a data-plane VM running <code>natforge-node</code>. A node self-registers on boot with its own wildcard host + public TCP port pool; rename it, set a human region label, toggle whether users may place new tunnels there, or remove a decommissioned node. To add a region (e.g. a VM in Bulgaria), deploy a core there with a unique <code>NODE_ID</code>, a <code>PUBLIC_HOST</code> like <code>bg.natforge.com</code>, a reachable <code>CONTROL_ENDPOINT</code> / <code>INTERNAL_URL</code>, and point <code>WEBSITE_URL</code> here - it appears below automatically.</p>
                     <div class="card-body flush"><table class="table">
                         <thead><tr><th>Node</th><th>Region</th><th>Public host</th><th>Last seen</th><th>Available</th><th></th></tr></thead>
                         <tbody id="nodeRows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
@@ -111,7 +111,7 @@
                         <button class="btn btn-secondary btn-sm" onclick='toggleNode(${escapeAttr(n.node_id)}, ${escapeAttr(n.name)}, ${escapeAttr(n.region || "")}, ${n.active})'>${n.active ? 'Disable' : 'Enable'}</button>
                         <button class="btn btn-danger btn-sm" onclick='removeNode(${escapeAttr(n.node_id)})'>${nfIcon('close')}</button>
                     </td></tr>`;
-            }).join('') : '<tr><td colspan="6" class="empty">No nodes have registered yet. Start a core_proxy_backend pointed at this control plane.</td></tr>';
+            }).join('') : '<tr><td colspan="6" class="empty">No nodes have registered yet. Start a natforge-node pointed at this control plane.</td></tr>';
         }
 
         async function editNode(id, name, region, active) {

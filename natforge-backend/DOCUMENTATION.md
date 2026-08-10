@@ -1,6 +1,6 @@
-# Website Backend (Control Plane), Documentation
+# natforge-backend (Control Plane), Documentation
 
-`website_backend` is the NatForge **control plane**: an Axum HTTP service (`:3000`) backed by **PostgreSQL** (durable) and **Redis** (ephemeral). It owns identity, the multi-route tunnel reservation + region registry, per-tunnel observability, geo-blocking policy, admin policy, the internal API the nodes report to, and serving of the static dashboard. It is *not* in the data path.
+`natforge-backend` is the NatForge **control plane**: an Axum HTTP service (`:3000`) backed by **PostgreSQL** (durable) and **Redis** (ephemeral). It owns identity, the multi-route tunnel reservation + region registry, per-tunnel observability, geo-blocking policy, admin policy, the internal API the nodes report to, and serving of the static dashboard. It is *not* in the data path.
 
 ## Responsibilities
 1. Auth: Argon2id hashing, HS256 JWT sessions, RFC 8628 device flow (codes in Redis with TTL). Login/registration are **geo-gated** when a GeoLite2 DB is configured.

@@ -1,5 +1,5 @@
 //! REST route table for the website backend. Maps every documented endpoint
-//! (see `frontend/DOCUMENTATION.md`) onto its handler. Path params use axum 0.8
+//! (see `natforge-frontend/DOCUMENTATION.md`) onto its handler. Path params use axum 0.8
 //! `{name}` syntax.
 
 use axum::Router;

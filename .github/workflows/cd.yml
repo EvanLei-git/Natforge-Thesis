@@ -39,12 +39,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [website, core]
+        app: [backend, node]
         include:
-          - app: website
-            dockerfile: website_backend/Dockerfile
-          - app: core
-            dockerfile: core_proxy_backend/Dockerfile
+          - app: backend
+            dockerfile: natforge-backend/Dockerfile
+          - app: node
+            dockerfile: natforge-node/Dockerfile
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -127,8 +127,8 @@ jobs:
             # Cut over: stop + disable the native systemd services so the containers can
             # bind the shared ports (and so a reboot does not race the units against the
             # containers' restart:unless-stopped). Units stay installed for rollback:
-            # sudo systemctl start natforge-website natforge-core.
-            sudo systemctl disable --now natforge-website natforge-core 2>/dev/null || true
+            # sudo systemctl start natforge-backend natforge-node.
+            sudo systemctl disable --now natforge-backend natforge-node 2>/dev/null || true
             sudo docker compose -f docker-compose.deploy.yml up -d
             sudo docker image prune -f
         env:

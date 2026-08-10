@@ -1,7 +1,11 @@
 [package]
-name = "natforge"
+name = "natforge-agent"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "natforge"
+path = "src/main.rs"
 
 [dependencies]
 natforge-proto = { path = "../natforge-proto" }

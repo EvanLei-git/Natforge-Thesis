@@ -23,7 +23,7 @@ pub struct ControlTls {
 
 /// Generate a self-signed cert/key and wrap it into a TLS acceptor + fingerprint.
 pub fn generate() -> anyhow::Result<ControlTls> {
-    let cert = rcgen::generate_simple_self_signed(vec!["natforge-core".to_string()])
+    let cert = rcgen::generate_simple_self_signed(vec!["natforge-node".to_string()])
         .context("generate self-signed certificate")?;
     let cert_der: CertificateDer<'static> = cert.cert.der().clone();
     let key_der = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());

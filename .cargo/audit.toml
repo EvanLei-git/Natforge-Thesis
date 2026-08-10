@@ -15,7 +15,7 @@ ignore = [
 
     # The maxminddb advisory concerns `Reader::open_mmap`. NatForge loads the
     # GeoLite2 database with `Reader::open_readfile` (in-memory) in both
-    # core_proxy_backend/src/geo.rs and website_backend/src/geo.rs, and never calls
+    # natforge-node/src/geo.rs and natforge-backend/src/geo.rs, and never calls
     # the unsound mmap API, so the unsoundness is not reachable.
     "RUSTSEC-2025-0132",
 ]

@@ -22,7 +22,7 @@ deploys them to the VM. It also publishes the client agent as downloadable binar
 
 ## Images
 
-`ghcr.io/evanlei-git/natforge-website` and `ghcr.io/evanlei-git/natforge-core`,
+`ghcr.io/evanlei-git/natforge-backend` and `ghcr.io/evanlei-git/natforge-node`,
 tagged with the commit SHA and `latest`. A deploy pins a SHA, so rollback is just
 re-pinning the previous one.
 
@@ -68,14 +68,14 @@ NATFORGE_TAG=<previous-sha> docker compose -f docker-compose.deploy.yml up -d
 
 The container stack replaces the native `systemd` services. The deploy job performs the
 handoff automatically: before `docker compose up -d` it runs
-`sudo systemctl disable --now natforge-website natforge-core` (stop + disable, so the
+`sudo systemctl disable --now natforge-backend natforge-node` (stop + disable, so the
 containers can bind the shared ports and a reboot does not race the units against the
 containers' `restart: unless-stopped`). The unit files stay installed, so **rollback** is
 immediate:
 
 ```sh
 docker compose -f docker-compose.deploy.yml down
-sudo systemctl start natforge-website natforge-core
+sudo systemctl start natforge-backend natforge-node
 ```
 
 Prove the stack locally first (the `scripts/e2e.sh` smoke test). Once the container path is

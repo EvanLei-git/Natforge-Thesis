@@ -240,7 +240,7 @@ async fn with_forwarded_headers<S: AsyncRead + Unpin>(
 }
 
 /// Forward a plain-HTTP connection (the apex / www host) to the local dashboard
-/// (`website_backend`). The bytes already peeked for the Host header are replayed
+/// (`natforge-backend`). The bytes already peeked for the Host header are replayed
 /// first, then the streams are spliced - a simple L4 HTTP proxy, no preamble/yamux.
 async fn proxy_to_dashboard(mut inbound: TcpStream, peeked: Vec<u8>, upstream: &str) {
     let mut up = match TcpStream::connect(upstream).await {

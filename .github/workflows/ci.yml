@@ -9,7 +9,7 @@ on:
       - '**.rs'
       - '**/Cargo.toml'
       - 'Cargo.lock'
-      - 'website_backend/migrations/**'
+      - 'natforge-backend/migrations/**'
       - 'scripts/e2e.sh'
       - '.github/workflows/ci.yml'
   pull_request:

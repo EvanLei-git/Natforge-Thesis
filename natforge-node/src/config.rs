@@ -4,7 +4,7 @@ use std::env;
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Internal signalling API (talks to website_backend).
+    /// Internal signalling API (talks to natforge-backend).
     pub internal_api_port: u16,
     /// Agent control plane (yamux over TCP).
     pub control_port: u16,
@@ -29,7 +29,7 @@ pub struct Config {
     /// Inclusive public TCP port pool this node owns (seeded on registration).
     pub public_port_min: i32,
     pub public_port_max: i32,
-    /// URL of the website_backend control plane.
+    /// URL of the natforge-backend control plane.
     pub website_url: String,
     /// Redis URL (live routing mirror + rate limiting).
     pub redis_url: String,
@@ -42,7 +42,7 @@ pub struct Config {
     /// Path to a MaxMind GeoLite2-Country.mmdb (empty = geo-blocking disabled).
     pub geoip_db: String,
     /// Where the bare apex / www host on :80 is forwarded - the control-plane
-    /// dashboard (`website_backend`). Subdomains remain tunnel routes.
+    /// dashboard (`natforge-backend`). Subdomains remain tunnel routes.
     pub dashboard_addr: String,
     pub cf_api_token: String,
     pub cf_zone_id: String,

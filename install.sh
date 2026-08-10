@@ -5,10 +5,10 @@
 # ==============================================================================
 # Automates deployment of the distributed NatForge platform.
 # Components available for configuration:
-#   1. website_backend (control plane): auth, tunnels, region registry, admin, dashboard.
-#   2. core_proxy_backend (data plane, one per region): TLS+yamux relay, per-region
+#   1. natforge-backend (control plane): auth, tunnels, region registry, admin, dashboard.
+#   2. natforge-node (data plane, one per region): TLS+yamux relay, per-region
 #      public-port pool, geo-blocking. Self-registers on boot.
-#   3. natforge (agent): the Service Host agent on end-user machines.
+#   3. natforge-agent (agent): the Service Host agent on end-user machines.
 #
 # Usage:
 #   sudo ./install.sh --component <website | core | node>
@@ -146,15 +146,15 @@ enable_and_start() {
 
 case $COMPONENT in
     "website")
-        configure_service "website_backend" "natforge-website" "$INSTALL_DIR/website_backend" \
-            "PORT=3000\nNATFORGE_DOMAIN=natforge.com\nCORE_URL=http://127.0.0.1:3001\nFRONTEND_DIR=/usr/local/share/natforge/frontend\nDATABASE_URL=postgres://natforge:natforge@127.0.0.1:5432/natforge\nREDIS_URL=redis://127.0.0.1:6379\nGEOIP_DB=/etc/natforge/GeoLite2-Country.mmdb\nJWT_SECRET=CHANGE_ME\nINTERNAL_SECRET=CHANGE_ME"
+        configure_service "natforge-backend" "natforge-backend" "$INSTALL_DIR/natforge-backend" \
+            "PORT=3000\nNATFORGE_DOMAIN=natforge.com\nCORE_URL=http://127.0.0.1:3001\nFRONTEND_DIR=/usr/local/share/natforge/natforge-frontend\nDATABASE_URL=postgres://natforge:natforge@127.0.0.1:5432/natforge\nREDIS_URL=redis://127.0.0.1:6379\nGEOIP_DB=/etc/natforge/GeoLite2-Country.mmdb\nJWT_SECRET=CHANGE_ME\nINTERNAL_SECRET=CHANGE_ME"
         ;;
     "core")
         if [[ -z "$DEDICATED" ]]; then
             # Head-node / shared box: conservative pool (20000-20100, safe alongside
             # the co-hosted Postgres/Redis/website/monitoring) and head-local defaults.
             # Not auto-started here; the operator enables it, or the container deploy runs.
-            configure_service "core_proxy_backend" "natforge-core" "$INSTALL_DIR/core_proxy_backend" \
+            configure_service "natforge-node" "natforge-node" "$INSTALL_DIR/natforge-node" \
                 "CORE_INTERNAL_PORT=3001\nCORE_CONTROL_PORT=4000\nHTTP_PORT=80\nHTTPS_PORT=443\nPUBLIC_HOST=natforge.com\nNODE_ID=edge-1\nNODE_NAME=Primary\nNODE_REGION=Default\nCONTROL_ENDPOINT=natforge.com:4000\nINTERNAL_URL=http://127.0.0.1:3001\nPUBLIC_PORT_MIN=20000\nPUBLIC_PORT_MAX=20100\nGEOIP_DB=/etc/natforge/GeoLite2-Country.mmdb\nWEBSITE_URL=http://127.0.0.1:3000\nREDIS_URL=redis://127.0.0.1:6379\nJWT_SECRET=CHANGE_ME\nINTERNAL_SECRET=CHANGE_ME\nCF_API_TOKEN=mock_token"
         else
             # One-command relay-only REGIONAL node: collect the region settings (flags
@@ -180,7 +180,7 @@ case $COMPONENT in
             log "Node $NODE_ID ($NODE_NAME / $NODE_REGION) @ $PUBLIC_HOST, pool $POOL_MIN-$POOL_MAX"
             log "Head  WEBSITE_URL=$WEBSITE_URL  REDIS_URL=$REDIS_URL  (must be reachable from this node)"
             log "Node  CONTROL_ENDPOINT=$CONTROL_ENDPOINT  INTERNAL_URL=$INTERNAL_URL  (keep :3001 private)"
-            configure_service "core_proxy_backend" "natforge-core" "$INSTALL_DIR/core_proxy_backend" \
+            configure_service "natforge-node" "natforge-node" "$INSTALL_DIR/natforge-node" \
                 "CORE_INTERNAL_PORT=3001\nCORE_CONTROL_PORT=4000\nHTTP_PORT=80\nHTTPS_PORT=443\nPUBLIC_HOST=$PUBLIC_HOST\nNODE_ID=$NODE_ID\nNODE_NAME=$NODE_NAME\nNODE_REGION=$NODE_REGION\nCONTROL_ENDPOINT=$CONTROL_ENDPOINT\nINTERNAL_URL=$INTERNAL_URL\nPUBLIC_PORT_MIN=$POOL_MIN\nPUBLIC_PORT_MAX=$POOL_MAX\nGEOIP_DB=/etc/natforge/GeoLite2-Country.mmdb\nWEBSITE_URL=$WEBSITE_URL\nREDIS_URL=$REDIS_URL\nJWT_SECRET=$JWT_SECRET\nINTERNAL_SECRET=$INTERNAL_SECRET\nCF_API_TOKEN=$CF_API_TOKEN\nCF_ZONE_ID=$CF_ZONE_ID"
             DIR="$(cd "$(dirname "$0")" && pwd)"
             if [[ -f "$DIR/scripts/dedicated-node.sh" ]]; then
@@ -188,7 +188,7 @@ case $COMPONENT in
             else
                 log "run scripts/dedicated-node.sh on this VM to apply the kernel + firewall tuning."
             fi
-            enable_and_start "natforge-core" "$INSTALL_DIR/core_proxy_backend"
+            enable_and_start "natforge-node" "$INSTALL_DIR/natforge-node"
         fi
         ;;
     "node")

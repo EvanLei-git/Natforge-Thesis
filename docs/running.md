@@ -60,12 +60,12 @@ cargo build
 
 **3, control plane (dashboard + API on :3000).** *Why: auth, reservation, admin, serves the website.*
 ```bash
-./target/debug/website_backend
+./target/debug/natforge-backend
 ```
 
 **4, data plane.** *Why: the actual relay, agent control `:4000`, shared HTTP `:8080`, shared HTTPS/SNI `:8443`, TCP pool `20000–20100`.*
 ```bash
-PUBLIC_HOST=natforge.com HTTP_PORT=8080 HTTPS_PORT=8443 ./target/debug/core_proxy_backend
+PUBLIC_HOST=natforge.com HTTP_PORT=8080 HTTPS_PORT=8443 ./target/debug/natforge-node
 ```
 
 **5, a service to expose + the agent.** *Why: stand-in for your real app, then the agent that tunnels it.*
@@ -96,13 +96,13 @@ curl -k --resolve "<subdomain>.natforge.com:8443:127.0.0.1" https://<subdomain>.
 This is your **browser cache** showing the *old* page/stylesheet, the files on disk are the redesigned, emoji-free ones. Fix:
 - **Hard refresh:** `Ctrl+Shift+R` (or open a private window).
 - The server now sends `Cache-Control: no-cache`, so after one hard refresh it won't happen again.
-- **Frontend changes need no rebuild**, `website_backend` serves `frontend/` live from disk. Only **Rust** changes require `cargo build`. (So "re-running the binary" doesn't change anything if you only need a browser refresh.)
+- **Frontend changes need no rebuild**, `natforge-backend` serves `natforge-frontend/` live from disk. Only **Rust** changes require `cargo build`. (So "re-running the binary" doesn't change anything if you only need a browser refresh.)
 
 **"Address already in use" / a page won't load.**
 A previous run is still holding a port. Kill strays (the bracket avoids killing this command itself):
 ```bash
-pkill -9 -f '[t]arget/debug/website_backend'
-pkill -9 -f '[t]arget/debug/core_proxy_backend'
+pkill -9 -f '[t]arget/debug/natforge-backend'
+pkill -9 -f '[t]arget/debug/natforge-node'
 pkill -9 -f '[t]arget/debug/natforge'
 ```
 

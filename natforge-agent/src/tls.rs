@@ -105,6 +105,6 @@ pub async fn connect(tcp: TcpStream, fingerprint: &str) -> Result<TlsStream<TcpS
     let connector = TlsConnector::from(Arc::new(config));
     // The pin authenticates the peer; the SNI name is cosmetic (cert SAN matches).
     let server_name =
-        ServerName::try_from("natforge-core").map_err(|_| anyhow!("bad server name"))?;
+        ServerName::try_from("natforge-node").map_err(|_| anyhow!("bad server name"))?;
     Ok(connector.connect(server_name, tcp).await?)
 }

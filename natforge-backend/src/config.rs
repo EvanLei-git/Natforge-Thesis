@@ -33,7 +33,8 @@ impl Config {
                 .unwrap_or_else(|_| "natforge-dev-secret-change-me".to_string()),
             internal_secret: env::var("INTERNAL_SECRET")
                 .unwrap_or_else(|_| "natforge-internal-dev-secret".to_string()),
-            frontend_dir: env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend".to_string()),
+            frontend_dir: env::var("FRONTEND_DIR")
+                .unwrap_or_else(|_| "natforge-frontend".to_string()),
             database_url: env::var("DATABASE_URL").unwrap_or_else(|_| {
                 "postgres://natforge:natforge@127.0.0.1:5432/natforge".to_string()
             }),

@@ -42,13 +42,13 @@ while True:
     d,a=s.recvfrom(65535); s.sendto(b'UDP-OK:'+d,a)" >/tmp/nf_o_udp.log 2>&1 & PIDS+=($!)
 
 start_planes() {
-  RUST_LOG=warn ./target/debug/website_backend >/tmp/nf_web.log 2>&1 & PIDS+=($!)
+  RUST_LOG=warn ./target/debug/natforge-backend >/tmp/nf_web.log 2>&1 & PIDS+=($!)
   # HTTP_PORT is 18080 (not the 80/dev-8080 default) purely to dodge a port clash
   # with unrelated local containers on this dev box; the data plane is port-agnostic.
   PUBLIC_HOST=natforge.com CONTROL_ENDPOINT=127.0.0.1:4000 NODE_NAME=Local NODE_REGION=Local \
     HTTP_PORT=18080 HTTPS_PORT=8443 RUST_LOG=warn \
     WILDCARD_CERT_PATH=/tmp/nf_wild_c.pem WILDCARD_KEY_PATH=/tmp/nf_wild_k.pem \
-    ./target/debug/core_proxy_backend >/tmp/nf_core.log 2>&1 & PIDS+=($!)
+    ./target/debug/natforge-node >/tmp/nf_core.log 2>&1 & PIDS+=($!)
   for i in $(seq 1 60); do
     [ "$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3000/ 2>/dev/null)" = "200" ] && \
     [ "$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3001/health 2>/dev/null)" = "200" ] && return 0
@@ -184,7 +184,7 @@ ST2=$(curl -s -X POST 127.0.0.1:3000/api/auth/device/token -H 'content-type: app
 
 echo "### 5. state survives a both-planes restart"
 before=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -rc '.[0]|{subdomain,tcp:(.routes[]|select(.mode=="tcp")|.public_endpoint)}')
-kill %2 2>/dev/null; pkill -9 -f '[t]arget/debug/website_backend' 2>/dev/null; pkill -9 -f '[t]arget/debug/core_proxy_backend' 2>/dev/null
+kill %2 2>/dev/null; pkill -9 -f '[t]arget/debug/natforge-backend' 2>/dev/null; pkill -9 -f '[t]arget/debug/natforge-node' 2>/dev/null
 sleep 2; start_planes; sleep 9
 after=$(curl -s 127.0.0.1:3000/api/tunnels -H "authorization: Bearer $TOK" | jq -rc '.[0]|{subdomain,tcp:(.routes[]|select(.mode=="tcp")|.public_endpoint)}')
 [ "$before" = "$after" ] && [ -n "$before" ] \

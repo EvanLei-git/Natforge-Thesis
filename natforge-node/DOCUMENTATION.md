@@ -1,6 +1,6 @@
-# Core Proxy Backend (Data Plane), Documentation
+# natforge-node (Data Plane), Documentation
 
-`core_proxy_backend` is a NatForge **data-plane node** (one per region): a Tokio service that performs the byte relaying. Each agent's control connection is wrapped in **TLS** and becomes a **yamux** session carrying **multiple routes**; public traffic is routed to the right route by subdomain (HTTP `Host` / TLS SNI on shared ports) or by dedicated TCP port. On boot the node **self-registers** with the control plane (its host, port pool, and TLS cert fingerprint).
+`natforge-node` is a NatForge **data-plane node** (one per region): a Tokio service that performs the byte relaying. Each agent's control connection is wrapped in **TLS** and becomes a **yamux** session carrying **multiple routes**; public traffic is routed to the right route by subdomain (HTTP `Host` / TLS SNI on shared ports) or by dedicated TCP port. On boot the node **self-registers** with the control plane (its host, port pool, and TLS cert fingerprint).
 
 ## Listeners
 - **Agent control** `:4000`, agents connect over **TLS** (self-signed, fingerprint-pinned); length-prefixed JSON handshake, then yamux (core = client, agent = server).

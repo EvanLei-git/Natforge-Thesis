@@ -43,7 +43,7 @@ pub struct TunnelView {
 }
 
 async fn health() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok", "service": "core_proxy_backend" }))
+    Json(json!({ "status": "ok", "service": "natforge-node" }))
 }
 
 async fn list_tunnels(

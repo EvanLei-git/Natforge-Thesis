@@ -1,4 +1,4 @@
-# Proxy Node (Agent), Documentation
+# natforge-agent (Agent), Documentation
 
 `natforge` is the NatForge **Service-Host agent**, one binary. It authenticates against the control plane, reserves a tunnel (in a chosen region), then connects to that region's data-plane node over TLS.
 

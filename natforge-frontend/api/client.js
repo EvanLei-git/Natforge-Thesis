@@ -1,7 +1,7 @@
 /**
  * NatForge - Frontend API Client
  *
- * A thin wrapper over the website_backend REST API. Served from the same origin
+ * A thin wrapper over the natforge-backend REST API. Served from the same origin
  * as the backend, so all paths are relative ("/api/..."). Handles JWT storage,
  * the Authorization header, and a couple of small response helpers.
  */

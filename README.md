@@ -14,10 +14,10 @@ IPv4 exhaustion pushed ISPs onto Carrier-Grade NAT (CGNAT), where thousands of s
 
 ```
   friend ──public :80 / :443 / port pool──►  relay node (a region)  ◄──TLS + yamux── agent ──► your local service
-                                             (core_proxy_backend)                  (natforge)     (game / web / SSH)
+                                             (natforge-node)                  (natforge)     (game / web / SSH)
                                                      │ internal API
                                                      ▼
-                                          control plane  (website_backend + PostgreSQL + Redis)
+                                          control plane  (natforge-backend + PostgreSQL + Redis)
 ```
 
 1. You sign in to the dashboard, reserve a tunnel (pick a **region** and one or more **routes**), and receive a signed token.
@@ -59,10 +59,10 @@ IPv4 exhaustion pushed ISPs onto Carrier-Grade NAT (CGNAT), where thousands of s
 
 ```bash
 docker compose up -d                     # PostgreSQL + Redis
-cargo run -p website_backend             # control plane + dashboard on :3000
+cargo run -p natforge-backend             # control plane + dashboard on :3000
 PUBLIC_HOST=natforge.com CONTROL_ENDPOINT=127.0.0.1:4000 \
-  cargo run -p core_proxy_backend        # a data-plane node (self-registers)
-cargo run -p natforge -- service-host \
+  cargo run -p natforge-node        # a data-plane node (self-registers)
+cargo run -p natforge-agent -- service-host \
   --email you@example.com --password '...' --route 8000:http
 ```
 
@@ -74,13 +74,13 @@ Four Rust artifacts around a **control-plane / data-plane split**:
 
 | Component | Role |
 |---|---|
-| `website_backend` | Control plane: Axum REST API + dashboard, auth, tunnel reservation, region registry, policy, PostgreSQL + Redis. |
-| `core_proxy_backend` | Data plane (one per region): the TLS + yamux relay, shared `:80`/`:443` Host/SNI routers, dedicated TCP/UDP port pool. Self-registers with the control plane. |
-| `natforge` | The single-binary agent (Service Host / persistent device). |
-| `frontend` | Static, framework-free dashboard (Service Host + Admin). |
+| `natforge-backend` | Control plane: Axum REST API + dashboard, auth, tunnel reservation, region registry, policy, PostgreSQL + Redis. |
+| `natforge-node` | Data plane (one per region): the TLS + yamux relay, shared `:80`/`:443` Host/SNI routers, dedicated TCP/UDP port pool. Self-registers with the control plane. |
+| `natforge-agent` | The single-binary agent (Service Host / persistent device); installed command `natforge`. |
+| `natforge-frontend` | Static, framework-free dashboard (Service Host + Admin). |
 | `natforge-proto` | The shared wire protocol (tokens, handshake, per-stream preamble). |
 
-Each of `frontend`, `website_backend`, `core_proxy_backend`, and `natforge` carries its own `DOCUMENTATION.md`.
+Each of `natforge-frontend`, `natforge-backend`, `natforge-node`, and `natforge-agent` carries its own `DOCUMENTATION.md`.
 
 ## CI/CD and operations
 

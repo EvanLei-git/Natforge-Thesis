@@ -10,8 +10,8 @@ Everything **you** need to do to run NatForge in production without issues, secr
 
 | Process | Where | Notes |
 |---|---|---|
-| `website_backend` | the VM | control plane + dashboard, talks to PostgreSQL + Redis (port 3000, internal) |
-| `core_proxy_backend` | the VM (**static public IP**) | data plane: agent control `:4000`, shared HTTP `:80`, shared HTTPS/SNI `:443`, TCP pool `20000–20100`, internal API `:3001` |
+| `natforge-backend` | the VM | control plane + dashboard, talks to PostgreSQL + Redis (port 3000, internal) |
+| `natforge-node` | the VM (**static public IP**) | data plane: agent control `:4000`, shared HTTP `:80`, shared HTTPS/SNI `:443`, TCP pool `20000–20100`, internal API `:3001` |
 | PostgreSQL + Redis | the VM (or managed) | durable + ephemeral state |
 | `natforge` | **your users' machines** (not the VM) | the agent; can be behind CGNAT |
 
@@ -46,16 +46,16 @@ The VM is the public endpoint, so it **must have a static public IP** and cannot
 
 ## 3. Environment per component (what to change, and where)
 
-`sudo ./install.sh --component website` and `--component core` generate `/etc/natforge/natforge-website.env` and `/etc/natforge/natforge-core.env` with `CHANGE_ME` placeholders. Edit those:
+`sudo ./install.sh --component website` and `--component core` generate `/etc/natforge/natforge-backend.env` and `/etc/natforge/natforge-node.env` with `CHANGE_ME` placeholders. Edit those:
 
-> These are the **systemd** env files (their names match the `natforge-website`/`natforge-core` units). The container deploy of `docs/cd.md` reads `/etc/natforge/website.env` and `core.env` instead, same keys, different filenames.
+> These are the **systemd** env files (their names match the `natforge-backend`/`natforge-node` units). The container deploy of `docs/cd.md` reads `/etc/natforge/website.env` and `core.env` instead, same keys, different filenames.
 
-**`/etc/natforge/natforge-website.env`**
+**`/etc/natforge/natforge-backend.env`**
 ```ini
 PORT=3000
 NATFORGE_DOMAIN=natforge.com
 CORE_URL=http://127.0.0.1:3001 # fallback only; nodes carry their own internal_url
-FRONTEND_DIR=/usr/local/share/natforge/frontend
+FRONTEND_DIR=/usr/local/share/natforge/natforge-frontend
 DATABASE_URL=postgres://natforge:<STRONG_DB_PASSWORD>@127.0.0.1:5432/natforge
 REDIS_URL=redis://127.0.0.1:6379
 GEOIP_DB=/etc/natforge/GeoLite2-Country.mmdb # optional; geo-blocking is a no-op without it
@@ -63,7 +63,7 @@ JWT_SECRET=<paste the 64-hex secret>
 INTERNAL_SECRET=<paste the other 64-hex secret>
 ```
 
-**`/etc/natforge/natforge-core.env`** (one per region, change the NODE_* / PUBLIC_HOST / CONTROL_ENDPOINT / INTERNAL_URL per VM)
+**`/etc/natforge/natforge-node.env`** (one per region, change the NODE_* / PUBLIC_HOST / CONTROL_ENDPOINT / INTERNAL_URL per VM)
 ```ini
 CORE_INTERNAL_PORT=3001
 CORE_CONTROL_PORT=4000
@@ -106,7 +106,7 @@ natforge service-host --route 25565:tcp \
 
 ## 4. Database & Redis
 
-- **Docker (simplest):** edit `POSTGRES_PASSWORD` in `docker-compose.yml` to match your `DATABASE_URL`, then `docker compose up -d`. Migrations run automatically when `website_backend` starts; each node seeds its own TCP port pool when it self-registers on boot.
+- **Docker (simplest):** edit `POSTGRES_PASSWORD` in `docker-compose.yml` to match your `DATABASE_URL`, then `docker compose up -d`. Migrations run automatically when `natforge-backend` starts; each node seeds its own TCP port pool when it self-registers on boot.
 - **Managed/native:** create a `natforge` database and user, set `DATABASE_URL`, point `REDIS_URL` at your Redis. Nothing else, the schema is applied by `sqlx::migrate!` at boot.
 
 ---
@@ -148,7 +148,7 @@ Full DNS/TLS rationale: `docs/https.md`.
 
 The core's `:443` router does **SNI passthrough** (it never decrypts), so it **cannot also serve the TLS-terminated dashboard** on the same port. Pick one:
 
-- **Recommended (simplest):** give the dashboard its own hostname `app.natforge.com`, **Cloudflare-proxied (orange)**, with Cloudflare terminating TLS and forwarding to your origin (run `website_backend` on `:3000`, or behind Caddy). Keep `*.natforge.com` grey for tunnels. No port conflict because the dashboard host is distinct from tunnel hosts.
+- **Recommended (simplest):** give the dashboard its own hostname `app.natforge.com`, **Cloudflare-proxied (orange)**, with Cloudflare terminating TLS and forwarding to your origin (run `natforge-backend` on `:3000`, or behind Caddy). Keep `*.natforge.com` grey for tunnels. No port conflict because the dashboard host is distinct from tunnel hosts.
 - **Self-managed TLS:** run a one-line **Caddy** (or nginx) reverse proxy that terminates TLS for `app.natforge.com` → `127.0.0.1:3000`. Caddy auto-obtains Let's Encrypt certs.
 - **Single-IP advanced:** front everything with a proxy on `:443` that terminates TLS for the dashboard host and TCP-passes tunnel hosts to the core by SNI. Only needed if you refuse a separate dashboard subdomain.
 
@@ -180,8 +180,8 @@ For **unencrypted-origin HTTP tunnels** (a user exposing plain HTTP), NatForge c
 cargo build --release
 
 # 2. Install binaries + frontend
-sudo install -m755 target/release/{website_backend,core_proxy_backend,natforge} /usr/local/bin/
-sudo mkdir -p /usr/local/share/natforge && sudo cp -r frontend /usr/local/share/natforge/
+sudo install -m755 target/release/{natforge-backend,natforge-node,natforge} /usr/local/bin/
+sudo mkdir -p /usr/local/share/natforge && sudo cp -r natforge-frontend /usr/local/share/natforge/
 
 # 3. Datastores
 # edit POSTGRES_PASSWORD in docker-compose.yml first
@@ -190,10 +190,10 @@ docker compose up -d
 # 4. Generate + edit service env (see §3), then enable
 sudo ./install.sh --component website
 sudo ./install.sh --component core
-sudo nano /etc/natforge/natforge-website.env # paste real secrets/URLs
-sudo nano /etc/natforge/natforge-core.env
+sudo nano /etc/natforge/natforge-backend.env # paste real secrets/URLs
+sudo nano /etc/natforge/natforge-node.env
 sudo systemctl daemon-reload
-sudo systemctl enable --now natforge-website natforge-core
+sudo systemctl enable --now natforge-backend natforge-node
 ```
 
 > The core binds `:80`/`:443`; the generated unit runs as root so it can. If you prefer a non-root user, grant `CAP_NET_BIND_SERVICE` or front it with a proxy.

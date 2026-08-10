@@ -19,11 +19,11 @@
 # node_exporter 9100) all sit BELOW the pool and never collide with it.
 #
 # After running this, the installer (or you) must set in the node env
-# (/etc/natforge/natforge-core.env):
+# (/etc/natforge/natforge-node.env):
 #     PUBLIC_PORT_MIN=10000
 #     PUBLIC_PORT_MAX=60999
 # and restart the core, so it seeds the larger pool on re-registration:
-#     sudo systemctl restart natforge-core
+#     sudo systemctl restart natforge-node
 # ==============================================================================
 
 set -euo pipefail
@@ -91,6 +91,6 @@ fi
 
 log "cloud reminder: the same ports must also be open in your provider's firewall / NSG."
 log "next: ensure PUBLIC_PORT_MIN=${POOL_MIN} PUBLIC_PORT_MAX=${POOL_MAX} in the node env, then:"
-log "      sudo systemctl restart natforge-core"
+log "      sudo systemctl restart natforge-node"
 log "done. this node can now host up to $((POOL_MAX - POOL_MIN + 1)) dedicated TCP/UDP pool ports"
 log "      (plus unlimited HTTP/HTTPS subdomains on the shared :80/:443)."

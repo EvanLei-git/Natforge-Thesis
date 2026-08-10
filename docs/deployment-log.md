@@ -14,11 +14,11 @@ guide ("how to host"); this file is "what we actually did, and what went wrong."
 | Public IP | `<VM_IP>` |
 | Domain | `natforge.com` (DNS on Cloudflare) |
 | Toolchain | Docker 29.6 + Compose v5.2, Rust 1.96, build-essential/pkg-config/libssl-dev |
-| Control plane | `website_backend` on `:3000` (dashboard + API) |
-| Data-plane node | `core_proxy_backend`, registered as `head-1` / name **Main** / region **Primary**, `public_host=natforge.com`, ports `:80 :443 :4000 :3001` + TCP pool `20000-20100` |
+| Control plane | `natforge-backend` on `:3000` (dashboard + API) |
+| Data-plane node | `natforge-node`, registered as `head-1` / name **Main** / region **Primary**, `public_host=natforge.com`, ports `:80 :443 :4000 :3001` + TCP pool `20000-20100` |
 | Datastores | PostgreSQL 16 + Redis 7 via `docker compose` |
 | Agent | `natforge`, runs on **users' machines**, not the VM |
-| Services | systemd: `natforge-website`, `natforge-core` (env in `/etc/natforge/*.env`, chmod 600) |
+| Services | systemd: `natforge-backend`, `natforge-node` (env in `/etc/natforge/*.env`, chmod 600) |
 
 DNS: `natforge.com` A → IP, and `*.natforge.com` A → IP, **both DNS-only (grey cloud)**.
 NSG inbound open: `22, 80, 443, 3000, 4000, 20000-20100`. Internal only: `3001, 5432, 6379`.
@@ -118,7 +118,7 @@ reconciled by hand (one `UPDATE`), which is why `admin@example.com` (registered
 before the pin) was a `user` until promoted.
 
 ### 3.11 Website crash-looped after a VM reboot, datastores didn't auto-start ⚠️ root-caused
-After the VM was stopped and started again, `natforge-website` was flapping: the
+After the VM was stopped and started again, `natforge-backend` was flapping: the
 journal showed `failed to connect to PostgreSQL … pool timed out` and systemd
 restarting it every few seconds. The app was fine, **`docker ps` was empty**. The
 `docker-compose.yml` had no `restart:` policy, so the Postgres/Redis containers did
@@ -144,7 +144,7 @@ crash-restarting until Postgres accepts connections.)
 - **Hardening:** `docker-compose.yml` publishes Postgres/Redis on `0.0.0.0:5432/6379`. They
  are protected by the NSG (not in the allow-list), but binding them to `127.0.0.1` is better
  defense-in-depth.
-- **Second region (test node):** deploy another `core_proxy_backend` on a separate VM with a
+- **Second region (test node):** deploy another `natforge-node` on a separate VM with a
  distinct `NODE_ID`/`PUBLIC_HOST` (e.g. `bg.natforge.com`) pointed at `WEBSITE_URL=https://natforge.com`;
  it self-registers and appears in the region dropdown.
 
@@ -164,19 +164,19 @@ rsync -az --delete \
 # on the VM: rebuild the control plane (frontend is static, rsync alone updates it)
 ssh azureuser@<VM_IP>
 cd ~/natforge && source ~/.cargo/env
-cargo build --release -p website_backend
-sudo systemctl restart natforge-website
+cargo build --release -p natforge-backend
+sudo systemctl restart natforge-backend
 ```
 
-- **DB migrations are automatic.** `website_backend` runs `sqlx::migrate!("./migrations")`
+- **DB migrations are automatic.** `natforge-backend` runs `sqlx::migrate!("./migrations")`
  at boot, so restarting the service applies any new append-only migration (here `0008`,
  which adds `users.name`/`users.banned`/`tunnels.name` and the `'stopped'` status) against
  the live Postgres. No manual `psql` step is needed; the migration is idempotent.
 - **Frontend needs no rebuild.** It is served from disk with `Cache-Control: no-cache`, so the
  new `profile.html`, admin moderation controls, and the Stop/Delete split are live the moment
  `rsync` lands them.
-- **Only rebuild the core** (`cargo build --release -p core_proxy_backend` + `systemctl restart
- natforge-core`) when a change touches the data plane; the profiles feature did not.
+- **Only rebuild the core** (`cargo build --release -p natforge-node` + `systemctl restart
+ natforge-node`) when a change touches the data plane; the profiles feature did not.
 - **The `natforge` agent runs on users' machines, not the VM.** The tunnel-edit feature changed
  the agent (it now re-reserves on every reconnect, so an admin/owner subdomain change re-routes a
  live tunnel within ~3s). The VM redeploy is still just website + static frontend; users pick up
@@ -200,7 +200,7 @@ Key operator steps (once):
 Then deploy from Actions -> CD -> "Run workflow" (or automatically on merge to `main`).
 Roll back with `NATFORGE_TAG=<previous-sha> docker compose -f docker-compose.deploy.yml up -d`.
 
-**Staged cutover from systemd:** stop (do not remove) `natforge-website`/`natforge-core`,
+**Staged cutover from systemd:** stop (do not remove) `natforge-backend`/`natforge-node`,
 bring the container stack up, verify the dashboard + a tunnel; if anything misbehaves,
 `docker compose ... down` and `systemctl start` the old units. Remove the units only
 once the container path is proven over a few deploys.

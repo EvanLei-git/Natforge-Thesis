@@ -1,6 +1,6 @@
-# Frontend (Dashboard), Documentation
+# natforge-frontend (Dashboard), Documentation
 
-Vanilla HTML + a **custom CSS design system** (no framework) + plain JavaScript, no build step. Served as static files by the control plane (`ServeDir` rooted at `frontend/`), so the dashboard and API share an origin.
+Vanilla HTML + a **custom CSS design system** (no framework) + plain JavaScript, no build step. Served as static files by the control plane (`ServeDir` rooted at `natforge-frontend/`), so the dashboard and API share an origin.
 
 ## Design system
 A dark, layered UI: **Discord-style surfaces** (`#1a1b1e` / `#2b2d31` / `#313338`), the **brand teal `#40b8c0`** taken from the logo (`natforge_flake`) as the accent, and **Azure-style components**, Segoe UI, low-radius rectangular buttons/inputs, flat fills, crisp focus rings. All defined as CSS variables at the top of `assets/css/style.css` (`--brand`, surfaces, `--radius-sm`, etc.). **No external CSS/JS framework and no emoji**, icons are inline stroke-SVGs (line style matching the hexagon logo) defined in `assets/js/app.js` (`NF_ICONS`) and injected into `[data-icon]` placeholders. Components: `.btn` (primary/secondary/ghost/danger), `.card`, `.stat`, `.table`, `.badge` (status + route-mode), `.switch`, `.input`, `.tabs`, `.modal-overlay`, `.toast`, all custom and themeable from the variables.
@@ -9,7 +9,7 @@ The logo lives at `assets/img/natforge_flake.{png,ico}` (transparent teal flake)
 
 ## Layout
 ```
-frontend/
+natforge-frontend/
 ├── views/       landing.html (/), signin.html (/signin), dashboard.html (/dashboard, Service Host),
 │                admin.html (/admin/network), users.html (/admin/users),
 │                tunnels.html (/admin/tunnels), profile.html (/profile)
