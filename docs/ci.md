@@ -8,7 +8,7 @@ Continuous integration runs on every push to `main` and every pull request.
  - `lint`: `cargo fmt --all --check` + `cargo clippy --workspace --all-targets -- -D warnings`
  - `unit`: `cargo test --workspace`
  - `build`: `cargo build --release --workspace`
- - `e2e`: `scripts/e2e.sh` (27 assertions; brings up Postgres+Redis via `docker compose`,
+ - `e2e`: `scripts/e2e.sh` (29 assertions; brings up Postgres+Redis via `docker compose`,
  runs both planes + the agent, tests HTTP/SNI/TCP routing, restart survival, profiles,
  moderation, tunnel edit + live re-route, and the device flow). Uploads `/tmp/nf_*.log`
  as an artifact on failure. **No secrets required**: the apps use matching dev defaults

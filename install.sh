@@ -11,7 +11,7 @@
 #   3. natforge (agent): the Service Host agent on end-user machines.
 #
 # Usage:
-#   sudo ./install.sh --component <website | core | node> [--mode service-host]
+#   sudo ./install.sh --component <website | core | node>
 #
 #   --dedicated (core only): set up a relay-only REGIONAL node in ONE command.
 #   It widens the public pool to 10000-60999, applies the kernel + firewall
@@ -42,7 +42,6 @@ err() { echo -e "\e[1;31m[ERROR]\e[0m $1"; exit 1; }
 
 # Parse arguments
 COMPONENT=""
-NODE_MODE=""
 DEDICATED=""
 NODE_ID=""; NODE_NAME=""; NODE_REGION=""; PUBLIC_HOST=""; HEAD_HOST=""
 INTERNAL_URL=""; JWT_SECRET=""; INTERNAL_SECRET=""; CF_TOKEN=""; CF_ZONE=""
@@ -50,7 +49,6 @@ INTERNAL_URL=""; JWT_SECRET=""; INTERNAL_SECRET=""; CF_TOKEN=""; CF_ZONE=""
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --component) COMPONENT="$2"; shift ;;
-        --mode) NODE_MODE="$2"; shift ;;
         --dedicated) DEDICATED="1" ;;
         --node-id) NODE_ID="$2"; shift ;;
         --node-name) NODE_NAME="$2"; shift ;;

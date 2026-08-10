@@ -78,7 +78,7 @@ docker compose -f docker-compose.deploy.yml down
 sudo systemctl start natforge-website natforge-core
 ```
 
-Prove the stack locally first (the smoke test in thesis §5.6.1). Once the container path is
+Prove the stack locally first (the `scripts/e2e.sh` smoke test). Once the container path is
 proven over a few deploys, the systemd unit files can be removed.
 
 ## Installing the agent (clients)
