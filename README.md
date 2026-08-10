@@ -1,6 +1,12 @@
-# NatForge
-
 [![CI](https://github.com/EvanLei-git/Thesis-reverse-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/EvanLei-git/Thesis-reverse-proxy/actions/workflows/ci.yml)
+
+# <img width="50" alt="natforge_flake" src="https://github.com/user-attachments/assets/a8279cf8-234f-4cb0-9d57-f9e6fddeed85" />  NatForge - Thesis
+
+# Development of a High-Performance Distributed Reverse Proxy in Rust
+
+<div align="center">
+  <img width="843" height="199" alt="HUA-Logo-White-Transparent-RGB" src="https://github.com/user-attachments/assets/2a323c33-10e4-4249-9496-d78a6076252a" />
+</div>
 
 **NatForge makes a service running on a machine behind NAT/CGNAT reachable from the public internet, with no port forwarding.** Run a game server, website, API, or SSH box at home; NatForge gives it a public address (`sub.natforge.com`, or your own domain) that anyone can connect to.
 
@@ -11,14 +17,8 @@ It is a self-hostable, multi-region reverse-proxy and tunneling platform written
 IPv4 exhaustion pushed ISPs onto Carrier-Grade NAT (CGNAT), where thousands of subscribers share one public IP and no subscriber can open an inbound port. Hosting anything from home then means renting a VPS or buying a static IP. NatForge restores inbound reachability the other way around: your machine dials *out* to a relay node, and the relay accepts public connections and forwards them back down that outbound tunnel.
 
 ## How it works
+<img width="1349" height="507" src="https://github.com/user-attachments/assets/8908152d-ea89-4793-8a89-ee2a9f889bce" />
 
-```
-  friend ──public :80 / :443 / port pool──►  relay node (a region)  ◄──TLS + yamux── agent ──► your local service
-                                             (natforge-node)                  (natforge)     (game / web / SSH)
-                                                     │ internal API
-                                                     ▼
-                                          control plane  (natforge-backend + PostgreSQL + Redis)
-```
 
 1. You sign in to the dashboard, reserve a tunnel (pick a **region** and one or more **routes**), and receive a signed token.
 2. The **agent** on your machine dials *outbound* to that region's **node**, wraps the connection in real TLS (a self-signed cert pinned by SHA-256 fingerprint), and upgrades it to a **yamux** session that multiplexes every route over one connection.
