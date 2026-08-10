@@ -48,6 +48,8 @@ The VM is the public endpoint, so it **must have a static public IP** and cannot
 
 `sudo ./install.sh --component website` and `--component core` generate `/etc/natforge/natforge-website.env` and `/etc/natforge/natforge-core.env` with `CHANGE_ME` placeholders. Edit those:
 
+> These are the **systemd** env files (their names match the `natforge-website`/`natforge-core` units). The container deploy of `docs/cd.md` reads `/etc/natforge/website.env` and `core.env` instead, same keys, different filenames.
+
 **`/etc/natforge/natforge-website.env`**
 ```ini
 PORT=3000
@@ -123,7 +125,7 @@ After delegating `natforge.com` to Cloudflare (set the two nameservers Cloudflar
 - **Keep the wildcard grey (DNS-only)**: Cloudflare's orange-cloud proxy terminates TLS (breaks SNI passthrough) and won't carry the raw TCP/UDP pool (`20000–20100` by default) without paid **Spectrum**.
 - Per-tunnel `_minecraft._tcp.<sub>` **SRV** records are created/removed automatically by the core when `CF_API_TOKEN`/`CF_ZONE_ID` are set (so players type just `<sub>.natforge.com`). Without them, players use `<sub>.natforge.com:<port>`.
 
-Full rationale: `Thesis.md` Appendix D.
+Full DNS/TLS rationale: `docs/https.md`.
 
 ---
 
@@ -138,7 +140,7 @@ Full rationale: `Thesis.md` Appendix D.
 | `3001` | **No** on the head (localhost); on a remote node, reachable only from the control plane | core internal API (secret-guarded) |
 | `5432`, `6379` | No (localhost only) | PostgreSQL / Redis |
 
-> **Dedicated (relay-only) node:** a VM that runs *only* the core has far fewer occupied ports, so it can host a much larger pool. `sudo ./install.sh --component core --dedicated` (or `sudo bash scripts/dedicated-node.sh`) widens the pool to **`10000–60999`** and narrows the kernel's outbound ephemeral range to `61000–65535`; then open `tcp/udp 10000–60999` on the host firewall **and** the cloud NSG, and keep `:3001` reachable only from the control-plane host. Rationale and the full recipe are in `Thesis.md` §3.3.6.
+> **Dedicated (relay-only) node:** a VM that runs *only* the core has far fewer occupied ports, so it can host a much larger pool. `sudo ./install.sh --component core --dedicated` (or `sudo bash scripts/dedicated-node.sh`) widens the pool to **`10000–60999`** and narrows the kernel's outbound ephemeral range to `61000–65535`; then open `tcp/udp 10000–60999` on the host firewall **and** the cloud NSG, and keep `:3001` reachable only from the control-plane host. The full recipe is `scripts/dedicated-node.sh`.
 
 ---
 
@@ -170,6 +172,8 @@ For **unencrypted-origin HTTP tunnels** (a user exposing plain HTTP), NatForge c
 ---
 
 ## 9. Production deploy (systemd)
+
+> The **primary** production path is the container CD pipeline (`docs/cd.md`). The systemd install below is the bare-metal alternative.
 
 ```bash
 # 1. Build

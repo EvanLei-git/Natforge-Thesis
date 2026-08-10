@@ -1,7 +1,7 @@
 # NatForge, Live Deployment Record & Troubleshooting
 
 A concrete record of standing up the **head node** (control plane + region 1) on Azure,
-plus **every difficulty hit and how it was resolved**. `Hosting.md` is the reference
+plus **every difficulty hit and how it was resolved**. `docs/hosting.md` is the reference
 guide ("how to host"); this file is "what we actually did, and what went wrong."
 
 ---
@@ -11,7 +11,7 @@ guide ("how to host"); this file is "what we actually did, and what went wrong."
 | Thing | Value |
 |---|---|
 | Cloud VM | Azure, hostname `head-node`, **Ubuntu 24.04 LTS**, 2 vCPU / 7.7 GB RAM / 29 GB disk |
-| Public IP | `20.251.98.204` |
+| Public IP | `<VM_IP>` |
 | Domain | `natforge.com` (DNS on Cloudflare) |
 | Toolchain | Docker 29.6 + Compose v5.2, Rust 1.96, build-essential/pkg-config/libssl-dev |
 | Control plane | `website_backend` on `:3000` (dashboard + API) |
@@ -159,10 +159,10 @@ stop-vs-delete feature set (migration `0008`) was deployed this way:
 # from the local repo root, push the working tree to the VM
 rsync -az --delete \
  --exclude target --exclude .git --exclude '*.env' \
- ./ azureuser@20.251.98.204:~/natforge/
+ ./ azureuser@<VM_IP>:~/natforge/
 
 # on the VM: rebuild the control plane (frontend is static, rsync alone updates it)
-ssh azureuser@20.251.98.204
+ssh azureuser@<VM_IP>
 cd ~/natforge && source ~/.cargo/env
 cargo build --release -p website_backend
 sudo systemctl restart natforge-website
@@ -186,7 +186,7 @@ sudo systemctl restart natforge-website
 ## 6. Container deployment (CD)
 
 The `rsync` + build-on-VM loop of §5 is superseded by the containerised CD pipeline
-(full reference: `docs/cd.md`; rationale: `Thesis.md` §5.6). In short: CI builds the
+(full reference: `docs/cd.md`). In short: CI builds the
 `website` + `core` Docker images, pushes them to `ghcr.io`, Trivy-scans them, and
 deploys them to the VM as `docker compose -f docker-compose.deploy.yml pull && up -d`
 (the core runs with host networking + `NET_BIND_SERVICE`, replacing the systemd unit;

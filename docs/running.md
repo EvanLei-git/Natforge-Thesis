@@ -1,6 +1,6 @@
 # Run & Test NatForge locally
 
-What to run, in what order, and **why**, to bring the whole platform up on your machine and prove it works. For production hosting see `Hosting.md`.
+What to run, in what order, and **why**, to bring the whole platform up on your machine and prove it works. For production hosting see `docs/hosting.md`.
 
 ---
 
@@ -32,7 +32,7 @@ bash scripts/e2e.sh
 | multi-route over one session | http + tcp run over a single yamux connection |
 | same subdomain+port after restart | PostgreSQL persistence + idempotent reservation + auto-reconnect |
 
-Expected last line: `### RESULT: 27 passed, 0 failed` (the suite has grown to cover profiles, moderation, tunnel edit + live re-route, and the device flow).
+Expected last line: `### RESULT: 29 passed, 0 failed` (the suite has grown to cover profiles, moderation, tunnel edit + live re-route, and the device flow).
 
 ```bash
 cargo test # also run the 10 unit tests (preamble codec, JWT claims, SNI/Host parsers)
@@ -76,7 +76,7 @@ python3 -m http.server 8000 # something to expose
 # or a raw game port: --route 25565:tcp
 ```
 
-Now open **http://127.0.0.1:3000** → **Create account** (the first account is admin) → **Request tunnel** (build routes, copy the command) → the agent prints the live endpoints.
+Now open **http://127.0.0.1:3000** → **Create account** (admin is granted in the database, not auto-assigned) → **Request tunnel** (build routes, copy the command) → the agent prints the live endpoints.
 
 **A "friend" connects** (no real DNS needed locally, fake the hostname):
 ```bash
@@ -116,4 +116,4 @@ pkill -9 -f '[t]arget/debug/natforge'
 
 ## D. What's mocked vs. real (so tests don't mislead you)
 
-Fully real and exercised by the tests above: the tunnel (HTTP/SNI/TCP), multi-route, auth + device flow, and Postgres+Redis persistence. **Region/geo blocking is managed in the UI but not enforced**; WireGuard encryption, UDP hole punching, and multi-node forwarding are not implemented. Cloudflare SRV provisioning is real but only fires with a configured `CF_API_TOKEN` (it logs locally). See `Hosting.md` §8 for the full list.
+Fully real and exercised by the tests above: the tunnel (HTTP/SNI/TCP/**UDP**), multi-route, auth + device flow, geo-blocking, and Postgres+Redis persistence. **Geo-blocking is enforced** (login gating on the control plane + per-connection drops at the node) once `GEOIP_DB` is set; **UDP tunneling and multi-region forwarding are implemented** (only direct **UDP hole punching / P2P** is deferred). Cloudflare SRV provisioning is real but only fires with a configured `CF_API_TOKEN` (it logs locally). See `docs/hosting.md` §8 for the full list.
