@@ -103,4 +103,4 @@ In short: point a Cloudflare **grey-cloud wildcard** `A *.natforge.com` at the n
 
 ## Status
 
-NatForge began as a thesis project and is a working, tested platform. The main planned direction is **direct peer-to-peer UDP hole punching** (to offload traffic from the relay), which is currently deferred.
+NatForge began as a thesis project and is a working, tested platform. The main planned directions are **direct peer-to-peer UDP hole punching** (to offload traffic from the relay) and a **QUIC-datagram** transport for lower-jitter UDP relaying; both are currently deferred.
