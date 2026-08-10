@@ -10,21 +10,26 @@ The logo lives at `assets/img/natforge_flake.{png,ico}` (transparent teal flake)
 ## Layout
 ```
 frontend/
-├── views/ index.html (login/register), dashboard.html (Service Host),
-│ admin.html (Admin), users.html (Admin → Users)
-├── api/client.js NatForgeAPI: fetch wrapper, JWT storage, one method/endpoint
+├── views/       landing.html (/), signin.html (/signin), dashboard.html (/dashboard, Service Host),
+│                admin.html (/admin/network), users.html (/admin/users),
+│                tunnels.html (/admin/tunnels), profile.html (/profile)
+├── api/client.js         NatForgeAPI: fetch wrapper, JWT storage, one method per endpoint (~40)
 └── assets/
- ├── css/style.css design tokens + components (custom, no framework)
- ├── js/app.js NF_ICONS + injector, requireAuth/logout, escapeHtml, tabs, modal, toast, fmtBytes
- └── img/natforge_flake.{png,ico}
+    ├── css/style.css      design tokens + components (custom, no framework)
+    ├── js/app.js          icons + injector, auth guard, modals/tabs/toasts, output encoders, formatters
+    ├── js/sidebar-nav.js  read-only device -> service-host tree for the non-dashboard pages
+    └── img/natforge_flake.{png,ico}
 ```
-HTML under `views/` references siblings with `../api/...` and `../assets/...`; `/` redirects to `/views/index.html`.
+The control plane serves **clean, extensionless routes** (`/`, `/signin`, `/dashboard`, `/admin/network|users|tunnels|profile`); pages load scripts and assets by absolute path (`/client.js`, `/assets/...`).
 
 ## Pages & wiring (all calls via `window.API`)
-- **index.html**, sign in / create account; stores JWT + role; redirects by role.
-- **dashboard.html**, the **Service Host** view: a **tunnel selector** (dropdown) driving a per-tunnel **detail panel** that shows the tunnel's **location** (region), **logging** (bandwidth summary + a recent-connections table from `getTunnelLogs`), and **blocking** (a per-tunnel country-block editor via `getTunnelRegionBlocks`/`setTunnelRegionBlocks`). A **route builder** modal with an optional **custom subdomain**, a **region** dropdown (`getRegions`), and per-route **label** inputs submits `requestTunnel(routes, subdomain, nodeId)` and prints the exact agent command. A card approves a CLI device code (RFC 8628).
-- **admin.html**, `requireAuth(true)`; stats + region blocks + the **regions (nodes)** table (`getNodes`, with rename/enable/disable/remove) + all-tunnels (with agent IP), refreshed on an interval.
-- **users.html**, `requireAuth(true)`; `getUsers()` + `getAllTunnels()`; per-user table (role, tunnel count, traffic, last seen) expanding to that user's tunnels with **agent IP** and route badges.
+- **landing.html** (`/`), the public entry page.
+- **signin.html** (`/signin`), sign in / create account; stores the JWT + role and redirects by role.
+- **dashboard.html** (`/dashboard`), the **Service Host** view: a **device-tree sidebar** (each enrolled device expands to its service hosts; standalone service hosts group separately) driving a per-tunnel **detail panel** with **location** (region), **logging** (bandwidth summary + a recent-connections table), and **blocking** (a per-tunnel country editor). From here a user requests tunnels (a region-aware route builder + optional custom subdomain), **adds/removes ports** on a live service (`setServiceRoutes`), sets a **per-route SRV** (`setRouteSrv`), attaches a **custom domain** (`setCustomDomain`/`clearCustomDomain`), **migrates** a tunnel to another region (`migrateTunnel`), and **stops/starts/deletes** it. An **Add device** modal enrolls a machine by pasting the code printed by `natforge enroll` (valid 1 hour).
+- **admin.html** (`/admin/network`), `requireAuth(true)`, stats + platform-wide region blocks + the **regions (nodes)** table (rename/enable/disable/remove).
+- **users.html** (`/admin/users`), per-user table (role, tunnel count, traffic, last seen) expanding to each user's tunnels + agent IP, with ban/unban/delete.
+- **tunnels.html** (`/admin/tunnels`), every tunnel across the platform (owner, region, public port, routes, traffic).
+- **profile.html** (`/profile`), self-service display name / email / password.
 
 ## Auth model
-`API` stores the JWT and sends `Authorization: Bearer …`. `requireAuth()` redirects unauthenticated users; `requireAuth(true)` enforces the admin role; `.admin-only` nav is hidden for non-admins.
+`API` stores the JWT and sends `Authorization: Bearer …`. `requireAuth()` redirects unauthenticated users; `requireAuth(true)` enforces the admin role. `applyRoleVisibility` hides `.admin-only` nav for non-admins **and** `.user-only` items for admins. Every server-supplied string is rendered through `escapeHtml` (element text) or `escapeAttr` (inline event-handler attributes) to prevent stored XSS.
