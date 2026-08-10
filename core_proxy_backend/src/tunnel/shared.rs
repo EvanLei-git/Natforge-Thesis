@@ -533,9 +533,7 @@ async fn splice_to_route<S>(
     let (reply_tx, reply_rx) = oneshot::channel();
     if handle
         .open_tx
-        .send(OpenStream {
-            reply: reply_tx,
-        })
+        .send(OpenStream { reply: reply_tx })
         .await
         .is_err()
     {

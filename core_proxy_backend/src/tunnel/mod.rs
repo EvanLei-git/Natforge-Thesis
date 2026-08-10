@@ -556,9 +556,7 @@ async fn bridge_public_connection(
     let (reply_tx, reply_rx) = oneshot::channel();
     if handle
         .open_tx
-        .send(OpenStream {
-            reply: reply_tx,
-        })
+        .send(OpenStream { reply: reply_tx })
         .await
         .is_err()
     {
