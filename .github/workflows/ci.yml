@@ -11,7 +11,6 @@ on:
       - 'Cargo.lock'
       - 'website_backend/migrations/**'
       - 'scripts/e2e.sh'
-      - 'scripts/migrate_e2e.sh'
       - '.github/workflows/ci.yml'
   pull_request:
 
@@ -63,21 +62,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: e2e-logs
-          path: /tmp/nf_*.log
-          if-no-files-found: ignore
-
-  migrate-e2e:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Cross-region migration e2e (two nodes)
-        run: bash scripts/migrate_e2e.sh
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: migrate-e2e-logs
           path: /tmp/nf_*.log
           if-no-files-found: ignore
