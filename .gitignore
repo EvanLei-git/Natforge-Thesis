@@ -2,6 +2,10 @@
 /target/
 **/*.rs.bk
 
+# stray compiled agent binaries (built by cargo or the agent-release workflow and
+# published as release assets; never belong in the repo)
+natforge-x86_64-linux-*
+
 # environment variables
 .env
 .env.*

@@ -14,18 +14,18 @@ docker exec natforge-redis redis-cli FLUSHALL >/dev/null 2>&1
 echo "MIGRATE-OK" > /tmp/nf_mig_index; mkdir -p /tmp/nf_mig_http; cp /tmp/nf_mig_index /tmp/nf_mig_http/index.html
 python3 -m http.server 8000 --directory /tmp/nf_mig_http >/tmp/nf_mig_o.log 2>&1 & PIDS+=($!)
 
-RUST_LOG=warn ./target/debug/website_backend >/tmp/nf_mig_web.log 2>&1 & PIDS+=($!)
+RUST_LOG=warn ./target/debug/natforge-backend >/tmp/nf_mig_web.log 2>&1 & PIDS+=($!)
 # node1 (US) and node2 (EU): disjoint control/internal/http/https ports + port pools.
 NODE_ID=node1 NODE_NAME=Node1 NODE_REGION=US PUBLIC_HOST=natforge.com \
   CONTROL_ENDPOINT=127.0.0.1:4000 CORE_CONTROL_PORT=4000 CORE_INTERNAL_PORT=3001 \
   HTTP_PORT=18080 HTTPS_PORT=8443 INTERNAL_URL=http://127.0.0.1:3001 \
   PUBLIC_PORT_MIN=20000 PUBLIC_PORT_MAX=20050 RUST_LOG=warn \
-  ./target/debug/core_proxy_backend >/tmp/nf_mig_n1.log 2>&1 & PIDS+=($!)
+  ./target/debug/natforge-node >/tmp/nf_mig_n1.log 2>&1 & PIDS+=($!)
 NODE_ID=node2 NODE_NAME=Node2 NODE_REGION=EU PUBLIC_HOST=n2.local \
   CONTROL_ENDPOINT=127.0.0.1:4001 CORE_CONTROL_PORT=4001 CORE_INTERNAL_PORT=3002 \
   HTTP_PORT=18081 HTTPS_PORT=8444 INTERNAL_URL=http://127.0.0.1:3002 \
   PUBLIC_PORT_MIN=20051 PUBLIC_PORT_MAX=20100 RUST_LOG=warn \
-  ./target/debug/core_proxy_backend >/tmp/nf_mig_n2.log 2>&1 & PIDS+=($!)
+  ./target/debug/natforge-node >/tmp/nf_mig_n2.log 2>&1 & PIDS+=($!)
 
 ready=0; for i in $(seq 1 60); do
   [ "$(curl -s -o /dev/null -w '%{http_code}' 127.0.0.1:3000/ 2>/dev/null)" = "303" ] && \

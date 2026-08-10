@@ -1,8 +1,8 @@
 //! NatForge shared wire protocol.
 //!
 //! This crate is the single source of truth for the contract between the data
-//! plane (`core_proxy_backend`) and the agent (`natforge`), plus the tunnel-token
-//! claims the control plane (`website_backend`) mints and the data plane verifies.
+//! plane (`natforge-node`) and the agent (`natforge`), plus the tunnel-token
+//! claims the control plane (`natforge-backend`) mints and the data plane verifies.
 //! Putting all of it here guarantees the three components cannot drift.
 //!
 //! Three things live here:

@@ -12,7 +12,7 @@ include:
 
 services:
   website:
-    image: ghcr.io/evanlei-git/natforge-website:${NATFORGE_TAG:-latest}
+    image: ghcr.io/evanlei-git/natforge-backend:${NATFORGE_TAG:-latest}
     pull_policy: always
     network_mode: host
     environment:
@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
 
   core:
-    image: ghcr.io/evanlei-git/natforge-core:${NATFORGE_TAG:-latest}
+    image: ghcr.io/evanlei-git/natforge-node:${NATFORGE_TAG:-latest}
     pull_policy: always
     network_mode: host
     cap_add:

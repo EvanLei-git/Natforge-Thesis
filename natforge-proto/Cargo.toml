@@ -3,7 +3,7 @@ name = "natforge-proto"
 version = "0.1.0"
 edition = "2024"
 
-# Shared wire contract between core_proxy_backend (data plane) and natforge
+# Shared wire contract between natforge-node (data plane) and natforge
 # (agent): the control-plane handshake types, the signed tunnel-token claims, and
 # the per-stream binary preamble codec. Keeping these in one crate means the two
 # sides can never drift out of sync.

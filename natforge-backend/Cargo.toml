@@ -1,0 +1,26 @@
+[package]
+name = "natforge-backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+natforge-proto = { path = "../natforge-proto" }
+axum = "0.8.8"
+axum-extra = { version = "0.10", features = ["typed-header"] }
+jsonwebtoken = { version = "11", default-features = false, features = ["rust_crypto"] }
+argon2 = "0.5.3"
+rand = "0.8.5"
+chrono = { version = "0.4.38", features = ["serde"] }
+reqwest = { version = "0.13.2", features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower-http = { version = "0.7", features = ["cors", "trace", "fs", "set-header"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "macros", "chrono"] }
+prometheus = { version = "0.13", default-features = false }
+dotenvy = "0.15"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+maxminddb = "0.30"

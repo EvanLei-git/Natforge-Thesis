@@ -11,7 +11,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'natforge/**'
+      - 'natforge-agent/**'
       - 'natforge-proto/**'
       - 'Cargo.lock'
       - '.github/workflows/agent-release.yml'
@@ -48,10 +48,10 @@ jobs:
           tool: cross
       - name: Build (native gnu)
         if: ${{ !matrix.cross }}
-        run: cargo build --release --target ${{ matrix.target }} -p natforge
+        run: cargo build --release --target ${{ matrix.target }} -p natforge-agent
       - name: Build (static musl via cross)
         if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }} -p natforge
+        run: cross build --release --target ${{ matrix.target }} -p natforge-agent
       - name: Stage binary
         run: install -m 0755 target/${{ matrix.target }}/release/natforge "${{ matrix.asset }}"
       - uses: actions/upload-artifact@v7
