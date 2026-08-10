@@ -1,6 +1,6 @@
 //! yamux client driver (pipelined).
 //!
-//! yamux 0.13 exposes a poll-based `Connection` with no separate control handle, so
+//! yamux 0.14 exposes a poll-based `Connection` with no separate control handle, so
 //! one task owns the connection, keeps it serviced, and fulfils outbound-stream
 //! requests. To avoid head-of-line blocking across routes (a burst on one route
 //! must not stall opens for another), this driver pipelines: it greedily drains

@@ -557,7 +557,6 @@ async fn bridge_public_connection(
     if handle
         .open_tx
         .send(OpenStream {
-            route_id: handle.route_id,
             reply: reply_tx,
         })
         .await
@@ -667,7 +666,6 @@ async fn udp_listener_loop(state: Arc<CoreState>, socket: UdpSocket, handle: Rou
                 if handle
                     .open_tx
                     .send(OpenStream {
-                        route_id: handle.route_id,
                         reply: reply_tx,
                     })
                     .await

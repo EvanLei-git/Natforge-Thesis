@@ -26,10 +26,9 @@ use crate::config::Config;
 use crate::geo::GeoDb;
 use natforge_proto::RouteMode;
 
-/// Request to the tunnel's yamux driver to open one outbound stream. `route_id`
-/// is informational (the caller writes the preamble); the driver only needs `reply`.
+/// Request to the tunnel's yamux driver to open one outbound stream. The caller
+/// writes the preamble; the driver only needs `reply`.
 pub struct OpenStream {
-    pub route_id: u16,
     pub reply: oneshot::Sender<Result<Stream, ConnectionError>>,
 }
 

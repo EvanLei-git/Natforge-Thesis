@@ -652,10 +652,22 @@ pub async fn set_custom_domain(
     {
         signal_node_stop(&state, &subdomain, &node_id).await;
     }
+    // The CNAME target is region-specific: edge.<this node's public host>, so a tunnel
+    // on Switzerland tells the user to point at edge.swiss.natforge.com, not the apex
+    // edge. (The operator provisions one grey `edge.<region>` record per region node.)
+    let edge_host = match &node_id {
+        Some(nid) => queries::get_node(&state.db.pg, nid)
+            .await
+            .ok()
+            .flatten()
+            .map(|n| n.public_host)
+            .unwrap_or_else(|| state.config.domain.clone()),
+        None => state.config.domain.clone(),
+    };
     Ok(Json(json!({
         "status": "custom_domain_set",
         "domain": domain,
-        "cname_target": format!("edge.{}", state.config.domain),
+        "cname_target": format!("edge.{edge_host}"),
     })))
 }
 

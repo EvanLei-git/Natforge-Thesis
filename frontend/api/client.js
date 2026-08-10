@@ -50,7 +50,6 @@ class NatForgeAPI {
     // --- Authentication ---
     register(email, password) { return this._req('POST', '/auth/register', { email, password }); }
     login(email, password)    { return this._req('POST', '/auth/login', { email, password }); }
-    approveDevice(userCode)   { return this._req('POST', '/auth/device', { user_code: userCode }); }
 
     // --- Devices (persistent enrolled agents) ---
     getDevices()                        { return this._req('GET', '/devices'); }
@@ -79,14 +78,12 @@ class NatForgeAPI {
     stopTunnel(tunnelId)  { return this._req('POST', `/tunnels/${encodeURIComponent(tunnelId)}/stop`); }
     startTunnel(tunnelId) { return this._req('POST', `/tunnels/${encodeURIComponent(tunnelId)}/start`); }
     deleteTunnel(tunnelId){ return this._req('DELETE', `/tunnels/${encodeURIComponent(tunnelId)}`); }
-    renameTunnel(tunnelId, name) { return this._req('PATCH', `/tunnels/${encodeURIComponent(tunnelId)}`, { name: name || null }); }
     // Full edit: { subdomain?, name?, route_labels?: [{route_id, label}] }.
     editTunnel(tunnelId, body)   { return this._req('PATCH', `/tunnels/${encodeURIComponent(tunnelId)}`, body); }
     // Reconcile a service's exposed ports in place. routes: [{ mode, local_port, label? }].
     setServiceRoutes(tunnelId, routes) { return this._req('PUT', `/tunnels/${encodeURIComponent(tunnelId)}/routes`, { routes }); }
     setRouteSrv(tunnelId, routeId, service) { return this._req('POST', `/tunnels/${encodeURIComponent(tunnelId)}/routes/${encodeURIComponent(routeId)}/srv`, { service: service || null }); }
     getRegions()          { return this._req('GET', '/regions'); }
-    getTunnelBandwidth(id){ return this._req('GET', `/tunnels/${encodeURIComponent(id)}/bandwidth`); }
     getTunnelLogs(id)     { return this._req('GET', `/tunnels/${encodeURIComponent(id)}/logs`); }
     getTunnelRegionBlocks(id)       { return this._req('GET', `/tunnels/${encodeURIComponent(id)}/region_blocks`); }
     setTunnelRegionBlocks(id, codes){ return this._req('PUT', `/tunnels/${encodeURIComponent(id)}/region_blocks`, { country_codes: codes }); }

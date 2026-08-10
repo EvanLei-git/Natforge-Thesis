@@ -534,7 +534,6 @@ async fn splice_to_route<S>(
     if handle
         .open_tx
         .send(OpenStream {
-            route_id: handle.route_id,
             reply: reply_tx,
         })
         .await

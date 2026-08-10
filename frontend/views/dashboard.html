@@ -180,11 +180,6 @@
         }
         setInterval(tickCountdowns, 1000);
 
-        function tunnelName(t) {
-            const label = t.routes.map(r => r.label).find(Boolean);
-            return label ? `${label} (${t.subdomain})` : t.full_host;
-        }
-
         async function loadRegions() {
             try {
                 const regions = await API.getRegions();
@@ -243,7 +238,7 @@
             }
             const svcs = tunnelsCache.filter(t => t.device_id === selectedDeviceId);
             const sig = device.id + '::' + device.status + '::' + (device.name || '') + '::' + svcs.map(s =>
-                `${s.tunnel_id}:${s.status}:${s.name || ''}:${s.subdomain}:${s.custom_domain || ''}:${s.region || ''}:`
+                `${s.tunnel_id}:${s.status}:${s.name || ''}:${s.subdomain}:${s.custom_domain || ''}:${s.region || ''}:${(s.region_blocks || []).join(',')}:${s.failover_from || ''}:`
                 + s.routes.map(r => `${r.mode}${r.local_port}${r.public_endpoint}`).join('+')
             ).join(';;');
             if (sig !== deviceViewSig) { deviceViewSig = sig; buildDeviceView(device, svcs); }
@@ -356,6 +351,15 @@
         // One service host: its own card, and a scroll-spy target section.
         function serviceHostSectionHtml(t, i) {
             const region = t.region ? `<span class="badge tag">${nfIcon('globe')} ${escapeHtml(t.region)}</span>` : '';
+            const failover = t.failover_from ? `<span class="badge danger" title="Automatically moved off ${escapeHtml(t.failover_from)} because that region went down. Your public address changed to the new region, so anyone using the old address needs the new one. Use Move to relocate it once ${escapeHtml(t.failover_from)} is back.">${nfIcon('globe')} moved from ${escapeHtml(t.failover_from)} (down)</span>` : '';
+            const blocks = (t.region_blocks || []).map(cc => `<span class="badge danger" title="Connections from ${escapeHtml(cc)} are refused. Click the x to allow again.">${nfIcon('shield')} ${escapeHtml(cc)} <span onclick="removeCountryBlock(${t.tunnel_id}, ${escapeAttr(cc)})" style="cursor:pointer;font-weight:700" title="Allow ${escapeHtml(cc)}">&times;</span></span>`).join(' ');
+            // The region-specific edge the custom domain must point at, and the exact SRV
+            // records the owner should place in their own DNS for any SRV-enabled route.
+            const edgeTarget = `edge.${t.public_host}`;
+            const srvLines = (t.routes || []).filter(r => r.srv_service).map(r => {
+                const proto = r.mode === 'udp' ? 'udp' : 'tcp';
+                return `<span class="faint small">SRV</span> <code class="nf-rec" title="Add this SRV record in your DNS (priority 0, weight 5)">_${escapeHtml(r.srv_service)}._${proto}.${escapeHtml(t.custom_domain || '')}  ->  0 5 ${r.public_port} ${escapeHtml(edgeTarget)}</code>`;
+            }).join(' ');
             const routes = t.routes.map(r => routeLine(r, t)).join('');
             return `
             <section id="svc-${t.tunnel_id}" data-svc="${t.tunnel_id}" class="card svc-section">
@@ -363,12 +367,13 @@
                     <div>
                         <h5 style="margin:0">${t.name ? escapeHtml(t.name) : escapeHtml(t.full_host)}</h5>
                         <div class="row-inline mt-xs" style="gap:8px; align-items:center">
-                            <span id="svc-${t.tunnel_id}-status" class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${region}
+                            <span id="svc-${t.tunnel_id}-status" class="badge ${t.status}">${t.status.replace('_', ' ')}</span>${region}${failover}${blocks}
                             <span class="faint small">${t.name ? escapeHtml(t.full_host) + ' &middot; ' : ''}#${t.tunnel_id}</span>
                         </div>
                     </div>
                     <div class="row-inline" style="gap:8px">
                         <button class="btn btn-secondary btn-icon" title="Edit service host" onclick="editTunnel(${t.tunnel_id})">${nfIcon('edit')}</button>
+                        <button class="btn btn-secondary btn-icon" title="Country blocks (geo-blocking)" onclick="blockingPrompt(${t.tunnel_id})">${nfIcon('shield')}</button>
                         ${t.status === 'stopped'
                             ? `<button class="btn btn-primary btn-sm" onclick="startTunnel(${t.tunnel_id})" title="Resume serving this service host">${nfIcon('bolt')} Start</button>`
                             : `<button class="btn btn-secondary btn-sm" onclick="stopTunnel(${t.tunnel_id})" title="Pause serving this service host (keeps it and its ports)">${nfIcon('stop')} Stop</button>`}
@@ -387,6 +392,9 @@
                     <div class="row-inline" style="gap:8px; align-items:center; flex-wrap:wrap">
                         ${t.custom_domain
                             ? `<span class="badge tag">${escapeHtml(t.custom_domain)}</span>
+                               <span class="faint small">CNAME</span>
+                               <code class="nf-rec" title="Add this CNAME record in your DNS">${escapeHtml(t.custom_domain)}  ->  ${escapeHtml(edgeTarget)}</code>
+                               ${srvLines}
                                <button class="btn btn-secondary btn-sm" onclick="setCustomDomainPrompt(${t.tunnel_id})">${nfIcon('edit')} Change</button>
                                <button class="btn btn-danger btn-sm" onclick="clearCustomDomain(${t.tunnel_id})">${nfIcon('trash')} Remove</button>`
                             : `<span class="faint small">None.</span>
@@ -398,10 +406,6 @@
                             <label class="lbl" style="margin-bottom:0">Region</label>
                             ${region || '<span class="faint small">default</span>'}
                             <button class="btn btn-secondary btn-sm" onclick="migrateTunnelPrompt(${t.tunnel_id})">${nfIcon('globe')} Move</button>
-                        </div>
-                        <div class="row-inline" style="gap:8px; align-items:center">
-                            <label class="lbl" style="margin-bottom:0">Geo-blocking</label>
-                            <button class="btn btn-secondary btn-sm" onclick="blockingPrompt(${t.tunnel_id})">${nfIcon('shield')} Country blocks</button>
                         </div>
                     </div>
 
@@ -469,16 +473,28 @@
 
         // Country geo-blocking for one service host, edited in a modal.
         async function blockingPrompt(tunnelId) {
+            // Additive: the button ADDS to the existing block list (union), removal is the
+            // x on each chip. So blocking one country never drops the ones already blocked.
             let codes = [];
             try { codes = await API.getTunnelRegionBlocks(tunnelId); } catch (_) {}
             const res = await nfPrompt({
-                title: 'Geo-blocking', confirmText: 'Save',
-                message: 'Refuse connections from these countries (ISO-3166 alpha-2, comma-separated, e.g. RU, CN). This service host only; the admin may also block regions platform-wide.',
-                fields: [{ key: 'codes', label: 'Blocked countries', value: codes.join(', '), placeholder: 'RU, CN, KP' }]
+                title: 'Block countries', confirmText: 'Block',
+                message: (codes.length ? `Already blocked: ${codes.join(', ')}. ` : '')
+                    + 'Add countries to block (ISO-3166 alpha-2, comma-separated, e.g. RU, CN). Remove one later with the x on its chip.',
+                fields: [{ key: 'codes', label: 'Countries to block', value: '', placeholder: 'RU, CN, KP' }]
             });
             if (res === null) return;
             const list = (res.codes || '').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-            try { await API.setTunnelRegionBlocks(tunnelId, list); toast('Country block list saved', 'success'); }
+            if (!list.length) return;
+            try { await API.setTunnelRegionBlocks(tunnelId, Array.from(new Set([...codes, ...list]))); toast('Country block list saved', 'success'); loadTunnels(); }
+            catch (err) { toast(err.message, 'danger'); }
+        }
+
+        // Remove a single blocked country (the x on a block chip) and refresh the card.
+        async function removeCountryBlock(tunnelId, cc) {
+            const t = tunnelsCache.find(x => x.tunnel_id === tunnelId);
+            const remaining = ((t && t.region_blocks) || []).filter(c => c !== cc);
+            try { await API.setTunnelRegionBlocks(tunnelId, remaining); toast(`Allowed ${cc}`, 'success'); loadTunnels(); }
             catch (err) { toast(err.message, 'danger'); }
         }
 
@@ -529,7 +545,7 @@
                 const regions = await API.getRegions();
                 if (!regions.length) { toast('No regions available', 'danger'); return; }
                 const res = await nfPrompt({ title: 'Move region', confirmText: 'Move',
-                    message: 'Move this tunnel to another region; the agent reconnects onto the new node in a few seconds.',
+                    message: 'Move this tunnel to another region. Its public address will change to reflect the new region (your-subdomain.new-region.natforge.com), so anyone using the old address will need the new one. A custom domain, if set, is reset (re-add it on the new region). The agent reconnects onto the new node in a few seconds.',
                     fields: [{ key: 'node_id', label: 'Region', type: 'select',
                                options: regions.map(r => ({ value: r.node_id, label: `${r.region || r.name} (${r.node_id})` })) }] });
                 if (res === null) return;

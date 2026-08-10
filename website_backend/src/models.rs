@@ -154,6 +154,13 @@ pub struct TunnelView {
     pub device_id: Option<i64>,
     /// User-owned hostname fronting this tunnel, if set.
     pub custom_domain: Option<String>,
+    /// Set when the failover sweep relocated this tunnel off a node that went down;
+    /// holds the region label it was moved FROM, so the dashboard can explain the
+    /// address change. None for tunnels the user placed or moved themselves.
+    pub failover_from: Option<String>,
+    /// Countries (ISO alpha-2) this tunnel refuses connections from, so the dashboard
+    /// can show them as removable chips. Empty when nothing is blocked.
+    pub region_blocks: Vec<String>,
     pub bytes_in: i64,
     pub bytes_out: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,

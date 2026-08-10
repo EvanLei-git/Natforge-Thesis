@@ -44,6 +44,11 @@ const SERVICE_HOST_IDLE_SECS: i64 = 31 * 24 * 3600;
 /// Connection-log rows kept per tunnel; older rows are pruned by the periodic sweep.
 const CONN_LOG_KEEP_PER_TUNNEL: i64 = 2000;
 
+/// A data-plane node missing this many seconds of heartbeats (3 missed 30s node
+/// re-registrations) is treated as down: its tunnels are failed over to a healthy
+/// node, which the running agent re-homes onto within its ~3s reconnect cycle.
+const NODE_FAILOVER_GRACE_SECS: i64 = 90;
+
 /// Serve a clean, extensionless page URL from the views directory: "/" maps to the
 /// landing page and "/<name>" to `views/<name>.html`. The name is restricted to
 /// `[A-Za-z0-9_-]`, so a request can never traverse out of the views directory.
@@ -127,6 +132,19 @@ async fn main() -> anyhow::Result<()> {
                     crate::db::queries::prune_conn_logs(&st.db.pg, CONN_LOG_KEEP_PER_TUNNEL).await
                 {
                     tracing::warn!("connection-log prune error: {e}");
+                }
+                // Failover: relocate tunnels off any node that stopped heartbeating.
+                match crate::db::queries::failover_stale_nodes(&st.db.pg, NODE_FAILOVER_GRACE_SECS)
+                    .await
+                {
+                    Ok(moves) => {
+                        for (sub, from, to) in &moves {
+                            tracing::warn!(
+                                "failover: relocated tunnel '{sub}' off down node '{from}' -> '{to}'"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::warn!("failover sweep error: {e}"),
                 }
             }
         });

@@ -373,7 +373,12 @@ pub async fn migrate_tunnel(
             .await
             .map_err(|e| ReserveError::Db(e.into()))?;
     }
-    sqlx::query("UPDATE tunnels SET node_id=$2, public_host=$3 WHERE id=$1")
+    // Region change also resets the custom domain: its DNS pointed at the old region's
+    // edge (edge.<old-region>.natforge.com), so it cannot follow. The owner re-adds it
+    // on the new region, where the dashboard shows the new edge target.
+    sqlx::query(
+        "UPDATE tunnels SET node_id=$2, public_host=$3, failover_from=NULL, custom_domain=NULL WHERE id=$1",
+    )
         .bind(tunnel_id)
         .bind(target_node_id)
         .bind(target_public_host)
@@ -382,6 +387,75 @@ pub async fn migrate_tunnel(
         .map_err(|e| ReserveError::Db(e.into()))?;
     tx.commit().await.map_err(|e| ReserveError::Db(e.into()))?;
     Ok(())
+}
+
+/// Failover: relocate every tunnel pinned to a data-plane node whose heartbeat has
+/// gone stale (`active` but `last_seen` older than `stale_secs`) onto a healthy node
+/// (active + recently seen). The running agent re-homes itself on its next
+/// re-reservation (~3s), so a dead node's tunnels recover with no operator action and
+/// no signal to the (unreachable) old node. Best-effort and safe: with no dead nodes,
+/// or no healthy target (e.g. a full outage where every node is stale), it does
+/// nothing; a tunnel that cannot fit the target's pool is left in place and skipped.
+/// Returns the moves made as `(subdomain, from_node, to_node)` for logging.
+pub async fn failover_stale_nodes(
+    pg: &PgPool,
+    stale_secs: i64,
+) -> anyhow::Result<Vec<(String, String, String)>> {
+    let dead_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT node_id, COALESCE(region, name, node_id) FROM nodes
+         WHERE active
+           AND (last_seen IS NULL OR last_seen < now() - make_interval(secs => $1))",
+    )
+    .bind(stale_secs as f64)
+    .fetch_all(pg)
+    .await?;
+    if dead_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dead: Vec<String> = dead_rows.iter().map(|(id, _)| id.clone()).collect();
+    // A healthy relocation target: active AND seen within the window, oldest first
+    // (stable). If every node is stale (a total outage), there is nowhere to move to.
+    let target: Option<(String, String)> = sqlx::query_as(
+        "SELECT node_id, public_host FROM nodes
+         WHERE active AND last_seen >= now() - make_interval(secs => $1)
+         ORDER BY created_at LIMIT 1",
+    )
+    .bind(stale_secs as f64)
+    .fetch_optional(pg)
+    .await?;
+    let Some((target_id, target_host)) = target else {
+        return Ok(Vec::new());
+    };
+    let pending: Vec<(i64, String, String)> =
+        sqlx::query_as("SELECT id, subdomain, node_id FROM tunnels WHERE node_id = ANY($1)")
+            .bind(&dead[..])
+            .fetch_all(pg)
+            .await?;
+    let mut moved = Vec::new();
+    for (tunnel_id, subdomain, from) in pending {
+        if from == target_id {
+            continue;
+        }
+        if migrate_tunnel(pg, tunnel_id, &target_id, &target_host)
+            .await
+            .is_ok()
+        {
+            // Record the region we moved off so the dashboard can explain the address
+            // change; migrate_tunnel cleared failover_from, so set it after the move.
+            let label = dead_rows
+                .iter()
+                .find(|(id, _)| id == &from)
+                .map(|(_, l)| l.clone())
+                .unwrap_or_else(|| from.clone());
+            let _ = sqlx::query("UPDATE tunnels SET failover_from = $1 WHERE id = $2")
+                .bind(&label)
+                .bind(tunnel_id)
+                .execute(pg)
+                .await;
+            moved.push((subdomain, from, target_id.clone()));
+        }
+    }
+    Ok(moved)
 }
 
 /// Reconcile a tunnel's routes to exactly `requested`, in one transaction, without
@@ -834,12 +908,13 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
             Some(nid) => get_node(pg, nid).await?.map(|n| n.region.unwrap_or(n.name)),
             None => None,
         };
-        let (custom_domain, device_id, last_active_at): (
+        let (custom_domain, device_id, last_active_at, failover_from): (
             Option<String>,
             Option<i64>,
             Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
         ) = sqlx::query_as(
-            "SELECT custom_domain, device_id, last_active_at FROM tunnels WHERE id = $1",
+            "SELECT custom_domain, device_id, last_active_at, failover_from FROM tunnels WHERE id = $1",
         )
         .bind(t.id)
         .fetch_one(pg)
@@ -861,6 +936,7 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
         let owner = user_by_id(pg, t.owner_id).await?;
         let owner_email = owner.as_ref().map(|u| u.email.clone());
         let owner_name = owner.and_then(|u| u.name);
+        let region_blocks = tunnel_region_blocks(pg, t.id).await.unwrap_or_default();
         views.push(TunnelView {
             tunnel_id: t.id,
             full_host: format!("{}.{}", t.subdomain, host),
@@ -876,6 +952,8 @@ async fn build_views(pg: &PgPool, tunnels: Vec<TunnelRow>) -> anyhow::Result<Vec
             region,
             device_id,
             custom_domain,
+            failover_from,
+            region_blocks,
             bytes_in,
             bytes_out,
             created_at: t.created_at,
@@ -1567,10 +1645,16 @@ pub async fn get_node(pg: &PgPool, node_id: &str) -> anyhow::Result<Option<Node>
     )
 }
 
-/// Default node for a reservation when none is specified: first active node.
+/// Default node for a reservation when none is specified. Prefers a node that is
+/// both active AND has heartbeated recently (last 90s), so a node that is down but
+/// still marked active is not handed out for new tunnels; falls back to the oldest
+/// active node when none have been seen recently (e.g. right after a website restart).
 pub async fn default_node(pg: &PgPool) -> anyhow::Result<Option<Node>> {
     Ok(sqlx::query_as::<_, Node>(&format!(
-        "SELECT {NODE_COLS} FROM nodes WHERE active ORDER BY created_at LIMIT 1"
+        "SELECT {NODE_COLS} FROM nodes WHERE active
+         ORDER BY (last_seen IS NOT NULL AND last_seen >= now() - make_interval(secs => 90)) DESC,
+                  created_at ASC
+         LIMIT 1"
     ))
     .fetch_optional(pg)
     .await?)

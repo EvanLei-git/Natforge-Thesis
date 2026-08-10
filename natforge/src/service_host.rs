@@ -268,6 +268,19 @@ async fn fetch_config(control_plane: &str, device_token: &str) -> Result<Vec<Res
 async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Result<()> {
     info!("connecting to core proxy control plane at {tunnel_server} (TLS)");
     let tcp = TcpStream::connect(tunnel_server).await?;
+    // Keep the control channel liveness-checked. A network or interface change (a cable
+    // swap, WiFi drop, roaming) can leave this socket wedged in ESTABLISHED on a source
+    // address that no longer exists, stalling the tunnel without ever erroring, so the
+    // reconnect loop never fires. TCP keepalive forces the dead path to surface as an
+    // error within ~50s, and the outer loop re-reserves and reconnects from the current
+    // interface. Mirrors the keepalive the core sets on the accepted side.
+    {
+        let ka = socket2::TcpKeepalive::new()
+            .with_time(std::time::Duration::from_secs(20))
+            .with_interval(std::time::Duration::from_secs(10))
+            .with_retries(3);
+        let _ = socket2::SockRef::from(&tcp).set_tcp_keepalive(&ka);
+    }
     let fingerprint = reservation
         .control_cert_fingerprint
         .as_deref()
