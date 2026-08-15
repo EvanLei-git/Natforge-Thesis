@@ -108,6 +108,7 @@ pub async fn run_http(state: Arc<CoreState>) -> anyhow::Result<()> {
     loop {
         match listener.accept().await {
             Ok((sock, peer)) => {
+                let _ = sock.set_nodelay(true);
                 let st = state.clone();
                 tokio::spawn(async move { serve_http(st, sock, peer).await });
             }
@@ -325,6 +326,7 @@ pub async fn run_https(state: Arc<CoreState>) -> anyhow::Result<()> {
     loop {
         match listener.accept().await {
             Ok((sock, peer)) => {
+                let _ = sock.set_nodelay(true);
                 let st = state.clone();
                 tokio::spawn(async move { serve_https(st, sock, peer).await });
             }
