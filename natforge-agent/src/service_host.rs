@@ -281,6 +281,9 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
             .with_retries(3);
         let _ = socket2::SockRef::from(&tcp).set_tcp_keepalive(&ka);
     }
+    // TCP_NODELAY on the control channel, mirroring the core side: flush small yamux
+    // frames immediately so interactive traffic stays low-latency.
+    let _ = tcp.set_nodelay(true);
     let fingerprint = reservation
         .control_cert_fingerprint
         .as_deref()
@@ -372,7 +375,10 @@ async fn handle_stream(stream: yamux::Stream, routes: Arc<HashMap<u16, (RouteMod
         return;
     }
     let mut local = match TcpStream::connect(("127.0.0.1", local_port)).await {
-        Ok(s) => s,
+        Ok(s) => {
+            let _ = s.set_nodelay(true);
+            s
+        }
         Err(e) => {
             error!("cannot reach local service on 127.0.0.1:{local_port}: {e}");
             return;

@@ -88,6 +88,10 @@ pub async fn run_control_plane(state: Arc<CoreState>) -> anyhow::Result<()> {
                 .with_retries(3);
             let _ = socket2::SockRef::from(&socket).set_tcp_keepalive(&ka);
         }
+        // TCP_NODELAY: this socket carries the whole yamux/TLS session. Disable
+        // send-side buffering so small relayed frames flush immediately, keeping
+        // interactive (low-concurrency) latency low.
+        let _ = socket.set_nodelay(true);
         let st = state.clone();
         tokio::spawn(async move {
             // Establish TLS before anything else: the whole yamux session (and every
@@ -524,6 +528,7 @@ async fn tcp_listener_loop(state: Arc<CoreState>, listener: TcpListener, handle:
             Ok(v) => v,
             Err(_) => continue,
         };
+        let _ = inbound.set_nodelay(true);
         let h = handle.clone();
         let st = state.clone();
         tokio::spawn(async move {
