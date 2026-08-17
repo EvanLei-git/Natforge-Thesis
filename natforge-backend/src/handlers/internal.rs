@@ -24,9 +24,7 @@ fn check_secret(state: &SharedState, headers: &HeaderMap) -> Result<(), (StatusC
     }
 }
 
-fn err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-}
+use crate::handlers::err;
 
 #[derive(Deserialize)]
 pub struct TunnelUpReq {

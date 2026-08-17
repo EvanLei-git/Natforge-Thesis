@@ -8,6 +8,7 @@ use serde_json::json;
 
 use crate::db::connection::SharedState;
 use crate::db::queries::{self, ReserveError};
+use crate::handlers::err as db_err;
 use crate::jwt::{AuthUser, DeviceAuth, issue_tunnel_token};
 use crate::models::{Node, RequestedRoute, RouteRow, TunnelRow, TunnelView};
 use natforge_proto::{RouteClaim, RouteMode};
@@ -236,7 +237,6 @@ pub async fn request_tunnel(
         .filter(|s| !s.is_empty());
 
     // Pick the node/region: the requested one (must exist + be active), else the default.
-    let db_err = |e: anyhow::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     let node = match &req.node_id {
         Some(nid) => queries::get_node(&state.db.pg, nid)
             .await
@@ -434,7 +434,6 @@ pub async fn device_config(
     State(state): State<SharedState>,
     dev: DeviceAuth,
 ) -> Result<Json<Vec<TunnelRequestRes>>, (StatusCode, String)> {
-    let db_err = |e: anyhow::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     // The running agent polls this endpoint; treat each poll as a liveness heartbeat.
     let _ = queries::touch_device_online(&state.db.pg, dev.device_id).await;
     let tunnels = queries::device_service_tunnels(&state.db.pg, dev.device_id)
@@ -497,7 +496,7 @@ async fn authorize_tunnel(
 ) -> Result<i32, (StatusCode, String)> {
     let owner = queries::tunnel_owner(&state.db.pg, tunnel_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "no such tunnel".to_string()))?;
     if owner != user.user_id && user.role != "admin" {
         return Err((StatusCode::FORBIDDEN, "not your tunnel".into()));
@@ -514,7 +513,7 @@ pub async fn tunnel_bandwidth(
     authorize_tunnel(&state, &user, tunnel_id).await?;
     let mut series = queries::bandwidth_series(&state.db.pg, tunnel_id, 100)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
     let (bytes_in, bytes_out) = series
         .first()
         .map(|s| (s.bytes_in, s.bytes_out))
@@ -538,7 +537,7 @@ pub async fn tunnel_logs(
     authorize_tunnel(&state, &user, tunnel_id).await?;
     let logs = queries::recent_conn_logs(&state.db.pg, tunnel_id, 20)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
     Ok(Json(logs))
 }
 
@@ -551,7 +550,7 @@ pub async fn get_tunnel_region_blocks(
     authorize_tunnel(&state, &user, tunnel_id).await?;
     let codes = queries::tunnel_region_blocks(&state.db.pg, tunnel_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
     Ok(Json(codes))
 }
 
@@ -585,7 +584,7 @@ pub async fn set_tunnel_region_blocks(
     }
     queries::set_tunnel_region_blocks(&state.db.pg, tunnel_id, &codes)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
     Ok(Json(json!({ "status": "updated", "country_codes": codes })))
 }
 
@@ -680,7 +679,7 @@ pub async fn clear_custom_domain(
     let (subdomain, node_id) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
     queries::set_custom_domain(&state.db.pg, tunnel_id, None)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
     if queries::tunnel_status(&state.db.pg, tunnel_id)
         .await
         .ok()
@@ -711,7 +710,7 @@ pub async fn migrate_tunnel(
     let (subdomain, old_node) = authorize_tunnel_owner(&state, &user, tunnel_id).await?;
     let target = queries::get_node(&state.db.pg, req.node_id.trim())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .filter(|n| n.active)
         .ok_or((
             StatusCode::BAD_REQUEST,
@@ -813,7 +812,7 @@ async fn authorize_tunnel_owner(
 ) -> Result<(String, Option<String>), (StatusCode, String)> {
     let owner = queries::tunnel_owner_subdomain(&state.db.pg, tunnel_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
         .ok_or((StatusCode::NOT_FOUND, "no such tunnel".to_string()))?;
     let (owner_id, subdomain, node_id) = owner;
     if owner_id != user.user_id && user.role != "admin" {
@@ -832,7 +831,7 @@ pub async fn delete_tunnel(
     signal_node_stop(&state, &subdomain, &node_id).await;
     let deleted = queries::delete_tunnel(&state.db.pg, tunnel_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
     if deleted == 0 {
         return Err((StatusCode::GONE, "tunnel already removed".into()));
     }
@@ -872,7 +871,7 @@ pub async fn set_route_srv(
     });
     let n = queries::set_route_srv(&state.db.pg, tunnel_id, route_id as i16, service.as_deref())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
     if n == 0 {
         return Err((StatusCode::NOT_FOUND, "route not found".into()));
     }
@@ -903,7 +902,7 @@ pub async fn stop_tunnel(
     signal_node_stop(&state, &subdomain, &node_id).await;
     let n = queries::stop_tunnel_keep(&state.db.pg, tunnel_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
     if n == 0 {
         return Err((StatusCode::GONE, "tunnel already removed".into()));
     }
@@ -922,7 +921,7 @@ pub async fn start_tunnel(
     authorize_tunnel_owner(&state, &user, tunnel_id).await?;
     let n = queries::start_tunnel_keep(&state.db.pg, tunnel_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(db_err)?;
     if n == 0 {
         return Err((StatusCode::CONFLICT, "service host is not paused".into()));
     }
@@ -980,7 +979,7 @@ pub async fn edit_tunnel(
         };
         queries::rename_tunnel(&state.db.pg, tunnel_id, name)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
     }
 
     // 2) Per-route labels.
@@ -994,7 +993,7 @@ pub async fn edit_tunnel(
         }
         queries::update_route_label(&state.db.pg, tunnel_id, rl.route_id, label)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
     }
 
     // 3) Subdomain - the actual address. Validate, ensure free, apply.
@@ -1008,13 +1007,13 @@ pub async fn edit_tunnel(
             }
             if queries::is_reserved_subdomain(&state.db.pg, &want)
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .map_err(db_err)?
             {
                 return Err((StatusCode::CONFLICT, "that subdomain is reserved".into()));
             }
             if queries::subdomain_in_use(&state.db.pg, &want, tunnel_id)
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+                .map_err(db_err)?
             {
                 return Err((
                     StatusCode::CONFLICT,
@@ -1035,7 +1034,7 @@ pub async fn edit_tunnel(
             // running agent re-reserves and reconnects on the new host.
             let status = queries::tunnel_status(&state.db.pg, tunnel_id)
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                .map_err(db_err)?;
             if status.as_deref() == Some("online") {
                 signal_node_stop(&state, &current_sub, &node_id).await;
             }
@@ -1085,11 +1084,11 @@ pub async fn set_service_routes(
     // (distinct local sockets); tcp:N twice, or udp:N twice, do.
     if let Some(device_id) = queries::tunnel_device_id(&state.db.pg, tunnel_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(db_err)?
     {
         let taken = queries::device_routes_excluding(&state.db.pg, device_id, tunnel_id)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            .map_err(db_err)?;
         if let Some(r) = req.routes.iter().find(|r| {
             taken.iter().any(|(k, p)| {
                 *p == r.local_port as i32

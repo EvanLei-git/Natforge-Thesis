@@ -11,9 +11,7 @@ use crate::db::queries;
 use crate::handlers::auth::{hash_password, verify_password};
 use crate::jwt::AuthUser;
 
-fn err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-}
+use crate::handlers::err;
 
 #[derive(Serialize)]
 pub struct ProfileRes {

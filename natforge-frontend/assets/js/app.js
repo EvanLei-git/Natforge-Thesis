@@ -91,6 +91,25 @@ function fmtDateTime(iso) {
     return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+// Display label for a device: the user's own name if set, else a stable numbered
+// fallback so an unnamed device still reads as "Device 1", "Device 2", ...
+function deviceLabel(d, idx) {
+    return (d.name && d.name.trim()) ? d.name.trim() : `Device ${idx + 1}`;
+}
+
+// Display label for a service host: its own name, else the first non-empty route
+// label, else a numbered fallback.
+function serviceLabel(t, idx) {
+    if (t.name && t.name.trim()) return t.name.trim();
+    const label = t.routes.map(r => r.label).find(Boolean);
+    return label || `Service host ${idx + 1}`;
+}
+
+// One stat card for the summary rows on the admin, tunnels, and users pages.
+function nfStatCard(label, value, cls, ic) {
+    return `<div class="stat ${cls || ''}"><div class="flex between"><div class="label">${label}</div>${nfIcon(ic)}</div><div class="value">${value}</div></div>`;
+}
+
 // Paint a range input's filled portion in the brand colour (cross-browser).
 function nfSlider(el) {
     if (!el) return;

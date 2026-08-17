@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -28,27 +28,9 @@ use crate::jwt::verify_tunnel_token;
 use crate::reporter;
 use crate::state::{ActiveTunnel, CoreState, OpenStream, RouteHandle, TunnelStats};
 use natforge_proto::{
-    AgentHello, CoreReply, RouteMode, RouteResult, encode_preamble, read_datagram, write_datagram,
+    AgentHello, CoreReply, ROLE_SERVICE_HOST, RouteMode, RouteResult, encode_preamble,
+    read_datagram, read_frame, write_datagram, write_frame,
 };
-
-const MAX_FRAME: u32 = 1 << 20;
-
-async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
-    let len = stream.read_u32().await?;
-    if len > MAX_FRAME {
-        anyhow::bail!("handshake frame too large ({len} bytes)");
-    }
-    let mut buf = vec![0u8; len as usize];
-    stream.read_exact(&mut buf).await?;
-    Ok(buf)
-}
-
-async fn write_frame<S: AsyncWrite + Unpin>(stream: &mut S, data: &[u8]) -> anyhow::Result<()> {
-    stream.write_u32(data.len() as u32).await?;
-    stream.write_all(data).await?;
-    stream.flush().await?;
-    Ok(())
-}
 
 #[derive(Serialize)]
 struct ErrReply<'a> {
@@ -129,7 +111,7 @@ where
 {
     // 1. Handshake + token verification.
     let hello: AgentHello = serde_json::from_slice(&read_frame(&mut socket).await?)?;
-    if hello.role != "service_host" {
+    if hello.role != ROLE_SERVICE_HOST {
         reject(&mut socket, format!("unsupported role '{}'", hello.role)).await?;
         return Ok(());
     }

@@ -70,11 +70,16 @@ pub struct AgentRouteBinding {
     pub local_port: u16,
 }
 
+/// The only role an agent announces today: a persistent host serving one or more
+/// local services. Kept as a shared constant so the agent (which sends it) and the
+/// node (which checks it) can never drift apart on the spelling.
+pub const ROLE_SERVICE_HOST: &str = "service_host";
+
 /// Frame 1: agent -> core, immediately after connecting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentHello {
     pub tunnel_token: String,
-    pub role: String, // "service_host"
+    pub role: String, // ROLE_SERVICE_HOST
     pub routes: Vec<AgentRouteBinding>,
 }
 
@@ -318,6 +323,31 @@ pub async fn read_datagram<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<O
         r.read_exact(&mut buf).await?;
     }
     Ok(Some(buf))
+}
+
+/// Largest handshake/control frame we accept (1 MiB). These frames carry JSON
+/// control messages (the agent hello, the core reply), so this is a generous
+/// ceiling that still rejects a peer that announces an absurd length.
+pub const MAX_FRAME: u32 = 1 << 20;
+
+/// Read one length-prefixed control frame: a big-endian `u32` length followed by
+/// that many bytes. Used for the pre-yamux handshake on the control channel.
+pub async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
+    let len = stream.read_u32().await?;
+    if len > MAX_FRAME {
+        anyhow::bail!("frame too large ({len} bytes)");
+    }
+    let mut buf = vec![0u8; len as usize];
+    stream.read_exact(&mut buf).await?;
+    Ok(buf)
+}
+
+/// Write one length-prefixed control frame, then flush so the peer sees it promptly.
+pub async fn write_frame<S: AsyncWrite + Unpin>(stream: &mut S, data: &[u8]) -> anyhow::Result<()> {
+    stream.write_u32(data.len() as u32).await?;
+    stream.write_all(data).await?;
+    stream.flush().await?;
+    Ok(())
 }
 
 #[cfg(test)]

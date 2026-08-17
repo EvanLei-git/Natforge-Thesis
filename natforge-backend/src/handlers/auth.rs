@@ -64,12 +64,7 @@ pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
     }
 }
 
-fn db_err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("database error: {e}"),
-    )
-}
+use crate::handlers::db_err;
 
 pub async fn register_user(
     State(state): State<SharedState>,

@@ -674,15 +674,6 @@
             catch (_) { /* transient; next tick retries */ }
         }
 
-        // Labels: the user's display name if set, else a stable numbered fallback.
-        function deviceLabel(d, idx) {
-            return (d.name && d.name.trim()) ? d.name.trim() : `Device ${idx + 1}`;
-        }
-        function serviceLabel(t, idx) {
-            if (t.name && t.name.trim()) return t.name.trim();
-            const lbl = t.routes.map(r => r.label).find(Boolean);
-            return lbl || `Service host ${idx + 1}`;
-        }
 
         function toggleTreeNode(key) {
             key = String(key);

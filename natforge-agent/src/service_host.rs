@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::task::JoinHandle;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -24,28 +24,9 @@ use yamux::{Config as YamuxConfig, Connection, Mode};
 // the agent and core can never drift; the agent only *reads* preambles (the core
 // writes them) and exchanges two length-prefixed JSON frames before the yamux upgrade.
 use natforge_proto::{
-    AgentHello, AgentRouteBinding, CoreReply, RouteMode, read_datagram, read_preamble,
-    write_datagram,
+    AgentHello, AgentRouteBinding, CoreReply, ROLE_SERVICE_HOST, RouteMode, read_datagram,
+    read_frame, read_preamble, write_datagram, write_frame,
 };
-
-const MAX_FRAME: u32 = 1 << 20;
-
-async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
-    let len = stream.read_u32().await?;
-    if len > MAX_FRAME {
-        anyhow::bail!("frame too large ({len} bytes)");
-    }
-    let mut buf = vec![0u8; len as usize];
-    stream.read_exact(&mut buf).await?;
-    Ok(buf)
-}
-
-async fn write_frame<S: AsyncWrite + Unpin>(stream: &mut S, data: &[u8]) -> anyhow::Result<()> {
-    stream.write_u32(data.len() as u32).await?;
-    stream.write_all(data).await?;
-    stream.flush().await?;
-    Ok(())
-}
 
 /// A route the user asked this agent to expose.
 #[derive(Debug, Clone)]
@@ -310,7 +291,7 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
 
     let hello = AgentHello {
         tunnel_token: reservation.tunnel_token.clone(),
-        role: "service_host".to_string(),
+        role: ROLE_SERVICE_HOST.to_string(),
         routes: bindings,
     };
     write_frame(&mut socket, &serde_json::to_vec(&hello)?).await?;

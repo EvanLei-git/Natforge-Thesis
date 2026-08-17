@@ -17,12 +17,7 @@ use crate::db::queries;
 use crate::jwt::{AuthUser, issue_device_token};
 use crate::models::Device;
 
-fn db_err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("database error: {e}"),
-    )
-}
+use crate::handlers::db_err;
 
 /// A fresh random string from `charset` (own RNG, so callers never share a borrow).
 fn random_from(charset: &[u8], n: usize) -> String {

@@ -20,9 +20,7 @@ fn require_admin(user: &AuthUser) -> Result<(), (StatusCode, String)> {
     }
 }
 
-fn err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-}
+use crate::handlers::err;
 
 pub async fn get_region_blocks(
     State(state): State<SharedState>,

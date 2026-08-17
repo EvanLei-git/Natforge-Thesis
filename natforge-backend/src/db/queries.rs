@@ -9,6 +9,19 @@ use sqlx::{PgPool, Postgres, Transaction};
 use crate::models::{Device, RouteRow, RouteView, TunnelRow, TunnelView, User};
 use natforge_proto::RouteMode;
 
+/// Claim one free port from a node's pool and assign it to a tunnel/route. Locks a
+/// single free row (`FOR UPDATE SKIP LOCKED`) so concurrent reservations never hand
+/// out the same port. Binds: `$1` node_id, `$2` tunnel_id, `$3` route_id; returns the
+/// claimed port, or `None` when the pool is exhausted.
+const CLAIM_PORT_SQL: &str = "WITH picked AS (
+    SELECT port FROM port_pool
+    WHERE node_id = $1 AND tunnel_id IS NULL
+    ORDER BY port FOR UPDATE SKIP LOCKED LIMIT 1
+)
+UPDATE port_pool p SET tunnel_id = $2, route_id = $3
+FROM picked WHERE p.node_id = $1 AND p.port = picked.port
+RETURNING p.port";
+
 // --------------------------------------------------------------------------
 // Users
 // --------------------------------------------------------------------------
@@ -346,22 +359,13 @@ pub async fn migrate_tunnel(
         if r.kind != "tcp" && r.kind != "udp" {
             continue;
         }
-        let port: Option<i32> = sqlx::query_scalar(
-            "WITH picked AS (
-                 SELECT port FROM port_pool
-                 WHERE node_id = $1 AND tunnel_id IS NULL
-                 ORDER BY port FOR UPDATE SKIP LOCKED LIMIT 1
-             )
-             UPDATE port_pool p SET tunnel_id = $2, route_id = $3
-             FROM picked WHERE p.node_id = $1 AND p.port = picked.port
-             RETURNING p.port",
-        )
-        .bind(target_node_id)
-        .bind(tunnel_id)
-        .bind(r.route_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(|e| ReserveError::Db(e.into()))?;
+        let port: Option<i32> = sqlx::query_scalar(CLAIM_PORT_SQL)
+            .bind(target_node_id)
+            .bind(tunnel_id)
+            .bind(r.route_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| ReserveError::Db(e.into()))?;
         let Some(port) = port else {
             return Err(ReserveError::PortExhausted); // rollback frees everything
         };
@@ -524,22 +528,13 @@ pub async fn set_service_routes(
         let public_port: Option<i32> = if mode.is_host_routed() {
             None
         } else {
-            let port: Option<i32> = sqlx::query_scalar(
-                "WITH picked AS (
-                     SELECT port FROM port_pool
-                     WHERE node_id = $1 AND tunnel_id IS NULL
-                     ORDER BY port FOR UPDATE SKIP LOCKED LIMIT 1
-                 )
-                 UPDATE port_pool p SET tunnel_id = $2, route_id = $3
-                 FROM picked WHERE p.node_id = $1 AND p.port = picked.port
-                 RETURNING p.port",
-            )
-            .bind(node_id)
-            .bind(tunnel_id)
-            .bind(next_route_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| ReserveError::Db(e.into()))?;
+            let port: Option<i32> = sqlx::query_scalar(CLAIM_PORT_SQL)
+                .bind(node_id)
+                .bind(tunnel_id)
+                .bind(next_route_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| ReserveError::Db(e.into()))?;
             match port {
                 Some(p) => Some(p),
                 None => return Err(ReserveError::PortExhausted), // rollback frees everything
@@ -809,22 +804,13 @@ pub async fn reserve_tunnel(
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
         let public_port: Option<i32> = if !mode.is_host_routed() {
-            let port: Option<i32> = sqlx::query_scalar(
-                "WITH picked AS (
-                     SELECT port FROM port_pool
-                     WHERE node_id = $1 AND tunnel_id IS NULL
-                     ORDER BY port FOR UPDATE SKIP LOCKED LIMIT 1
-                 )
-                 UPDATE port_pool p SET tunnel_id = $2, route_id = $3
-                 FROM picked WHERE p.node_id = $1 AND p.port = picked.port
-                 RETURNING p.port",
-            )
-            .bind(node_id)
-            .bind(tunnel_id)
-            .bind(route_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| ReserveError::Db(e.into()))?;
+            let port: Option<i32> = sqlx::query_scalar(CLAIM_PORT_SQL)
+                .bind(node_id)
+                .bind(tunnel_id)
+                .bind(route_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| ReserveError::Db(e.into()))?;
             match port {
                 Some(p) => Some(p),
                 None => return Err(ReserveError::PortExhausted), // rollback frees everything
