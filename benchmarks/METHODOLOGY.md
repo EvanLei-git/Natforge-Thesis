@@ -68,7 +68,7 @@ Prerequisites: a Rust toolchain, Docker, Python 3 with `venv`, and `jq` + `curl`
 Set `REPO` to your checkout of the NatForge source tree.
 
 ```sh
-REPO=/home/you/Thesis-reverse-proxy      # <-- your checkout
+REPO=/home/you/Natforge-Thesis      # <-- your checkout
 cd "$REPO/benchmarks"                    # this folder (lives inside the repo)
 ```
 

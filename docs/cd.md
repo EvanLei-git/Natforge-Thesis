@@ -85,7 +85,7 @@ proven over a few deploys, the systemd unit files can be removed.
 
 ```sh
 # static build, runs on any x86_64 Linux distro:
-curl -L https://github.com/EvanLei-git/Thesis-reverse-proxy/releases/latest/download/natforge-x86_64-linux-musl -o natforge
+curl -L https://github.com/EvanLei-git/Natforge-Thesis/releases/latest/download/natforge-x86_64-linux-musl -o natforge
 chmod +x natforge
 ./natforge service-host --route 8080:http --control-plane http://natforge.com:3000
 ```
