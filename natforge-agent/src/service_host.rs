@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional_with_sizes, split};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::task::JoinHandle;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -334,8 +334,10 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
         }
     }
 
-    // Upgrade to a yamux server session.
-    let mut conn = Connection::new(socket.compat(), YamuxConfig::default(), Mode::Server);
+    // Upgrade to a yamux server session. Larger send frames help bulk throughput.
+    let mut ycfg = YamuxConfig::default();
+    ycfg.set_split_send_size(64 * 1024);
+    let mut conn = Connection::new(socket.compat(), ycfg, Mode::Server);
     loop {
         match poll_fn(|cx| conn.poll_next_inbound(cx)).await {
             Some(Ok(stream)) => {
@@ -387,7 +389,7 @@ async fn handle_stream(stream: yamux::Stream, routes: Arc<HashMap<u16, (RouteMod
         warn!("failed writing replay to local service: {e}");
         return;
     }
-    if let Err(e) = copy_bidirectional(&mut remote, &mut local).await {
+    if let Err(e) = copy_bidirectional_with_sizes(&mut remote, &mut local, 65536, 65536).await {
         warn!("local relay closed: {e}");
     }
 }

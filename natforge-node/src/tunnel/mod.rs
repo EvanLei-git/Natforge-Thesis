@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional_with_sizes, split};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -251,7 +251,10 @@ where
     );
 
     let (open_tx, open_rx) = mpsc::channel::<OpenStream>(256);
-    let conn = Connection::new(socket.compat(), YamuxConfig::default(), Mode::Client);
+    // Larger yamux send frames cut per-frame overhead on bulk transfers (throughput tuning).
+    let mut ycfg = YamuxConfig::default();
+    ycfg.set_split_send_size(64 * 1024);
+    let conn = Connection::new(socket.compat(), ycfg, Mode::Client);
     let driver = tokio::spawn(mux::run_client_driver(conn, open_rx));
     let driver_abort = driver.abort_handle();
 
@@ -617,7 +620,7 @@ async fn bridge_public_connection(
         return;
     }
     let start = std::time::Instant::now();
-    match copy_bidirectional(&mut inbound, &mut outbound).await {
+    match copy_bidirectional_with_sizes(&mut inbound, &mut outbound, 65536, 65536).await {
         Ok((to_agent, from_agent)) => {
             handle.stats.bytes_in.fetch_add(to_agent, Ordering::Relaxed);
             handle

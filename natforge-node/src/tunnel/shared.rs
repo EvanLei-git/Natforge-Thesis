@@ -15,7 +15,10 @@ use std::sync::atomic::Ordering;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf, copy_bidirectional};
+use tokio::io::{
+    AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf, copy_bidirectional,
+    copy_bidirectional_with_sizes,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio_rustls::TlsAcceptor;
@@ -579,7 +582,7 @@ async fn splice_to_route<S>(
         return;
     }
     let start = std::time::Instant::now();
-    match copy_bidirectional(&mut inbound, &mut outbound).await {
+    match copy_bidirectional_with_sizes(&mut inbound, &mut outbound, 65536, 65536).await {
         Ok((to_agent, from_agent)) => {
             // `to_agent` already excludes the peeked bytes (they were consumed before
             // copy_bidirectional); count them once here, not twice.
