@@ -30,17 +30,29 @@ const PEEK_TIMEOUT: Duration = Duration::from_secs(5);
 /// Extract the routing subdomain (leftmost label) from a hostname, stripping any
 /// port and trailing dot. "duck-a1b2.natforge.com:8080" -> "duck-a1b2".
 fn subdomain_of(host: &str) -> String {
-    let host = host
-        .split(':')
-        .next()
-        .unwrap_or(host)
-        .trim()
-        .trim_end_matches('.');
-    host.split('.').next().unwrap_or(host).to_ascii_lowercase()
+    let before_port = host.split(':').next();
+    let before_port = match before_port {
+        Some(s) => s,
+        None => host,
+    };
+    let host = before_port.trim().trim_end_matches('.');
+    let first_label = host.split('.').next();
+    let first_label = match first_label {
+        Some(s) => s,
+        None => host,
+    };
+    first_label.to_ascii_lowercase()
 }
 
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
+    let mut index = 0;
+    for window in haystack.windows(needle.len()) {
+        if window == needle {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
 }
 
 /// A stream that first replays a `prefix` (bytes already read off `inner`) and then
@@ -148,10 +160,12 @@ async fn serve_http(state: Arc<CoreState>, mut inbound: TcpStream, peer: SocketA
     };
     // The bare apex (and `www.`) is the control-plane dashboard, not a tunnel:
     // forward those to the website backend instead of subdomain-routing them.
-    let hostname = host
-        .split(':')
-        .next()
-        .unwrap_or(&host)
+    let before_port = host.split(':').next();
+    let before_port = match before_port {
+        Some(s) => s,
+        None => host.as_str(),
+    };
+    let hostname = before_port
         .trim()
         .trim_end_matches('.')
         .to_ascii_lowercase();
@@ -219,10 +233,10 @@ async fn with_forwarded_headers<S: AsyncRead + Unpin>(
         return head;
     };
     let mut out = Vec::with_capacity(head.len() + 160);
-    for line in text
-        .split("\r\n")
-        .filter(|l| !l.to_ascii_lowercase().starts_with("x-forwarded-"))
-    {
+    for line in text.split("\r\n") {
+        if line.to_ascii_lowercase().starts_with("x-forwarded-") {
+            continue;
+        }
         out.extend_from_slice(line.as_bytes());
         out.extend_from_slice(b"\r\n");
     }
@@ -263,9 +277,16 @@ async fn proxy_to_dashboard(mut inbound: TcpStream, peeked: Vec<u8>, upstream: &
 /// Find the `Host:` header value in raw request bytes (case-insensitive).
 fn parse_host(buf: &[u8]) -> Option<String> {
     for line in buf.split(|&b| b == b'\n') {
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let line = match line.strip_suffix(b"\r") {
+            Some(stripped) => stripped,
+            None => line,
+        };
         if line.len() >= 5 && line[..5].eq_ignore_ascii_case(b"host:") {
-            let val = std::str::from_utf8(&line[5..]).ok()?.trim();
+            let val = match std::str::from_utf8(&line[5..]) {
+                Ok(s) => s,
+                Err(_) => return None,
+            };
+            let val = val.trim();
             if val.is_empty() {
                 return None;
             }
@@ -284,7 +305,11 @@ fn acme_challenge_token(buf: &[u8]) -> Option<String> {
     let _method = parts.next()?;
     let path = parts.next()?;
     let token = path.strip_prefix(PREFIX)?;
-    std::str::from_utf8(token).ok().map(str::to_string)
+    let text = match std::str::from_utf8(token) {
+        Ok(s) => Some(s),
+        Err(_) => None,
+    };
+    text.map(str::to_string)
 }
 
 /// Serve an ACME HTTP-01 key authorization (or 404 if the token is unknown).
@@ -352,10 +377,12 @@ async fn serve_https(state: Arc<CoreState>, mut inbound: TcpStream, peer: Socket
             _ => return, // NotTls / None / over cap -> close (cannot 404 under TLS)
         }
     };
-    let sni_host = sni
-        .split(':')
-        .next()
-        .unwrap_or(&sni)
+    let before_port = sni.split(':').next();
+    let before_port = match before_port {
+        Some(s) => s,
+        None => sni.as_str(),
+    };
+    let sni_host = before_port
         .trim()
         .trim_end_matches('.')
         .to_ascii_lowercase();
@@ -380,10 +407,11 @@ async fn serve_https(state: Arc<CoreState>, mut inbound: TcpStream, peer: Socket
     ) {
         Some((acc, h))
     } else if state.acme.has_cert(&sni_host) {
-        state
-            .custom_host_route(&sni_host, RouteMode::Http)
-            .await
-            .map(|h| (state.acme.acceptor(), h))
+        let custom = state.custom_host_route(&sni_host, RouteMode::Http).await;
+        match custom {
+            Some(h) => Some((state.acme.acceptor(), h)),
+            None => None,
+        }
     } else {
         None
     };

@@ -12,6 +12,20 @@
 //!      written by the core at the start of every yamux stream so the agent knows
 //!      which route the stream is for and can replay any peeked bytes verbatim.
 
+// This workspace is written in an intentionally expanded, one-statement-per-line
+// style: explicit `for`/`match` blocks instead of iterator and Option/Result
+// combinator chains, for readability. Allow the clippy lints that would otherwise
+// push it back toward the terser idiomatic forms.
+#![allow(
+    clippy::manual_map,
+    clippy::manual_filter,
+    clippy::manual_find,
+    clippy::manual_flatten,
+    clippy::manual_unwrap_or,
+    clippy::needless_range_loop,
+    clippy::comparison_chain
+)]
+
 use std::net::{IpAddr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
@@ -217,7 +231,11 @@ pub fn encode_preamble(route_id: u16, peer: Option<SocketAddr>, replay: &[u8]) -
     b.extend_from_slice(STREAM_MAGIC);
     b.push(STREAM_VERSION);
     b.extend_from_slice(&route_id.to_be_bytes());
-    match peer.map(|p| p.ip()) {
+    let peer_ip = match peer {
+        Some(addr) => Some(addr.ip()),
+        None => None,
+    };
+    match peer_ip {
         Some(IpAddr::V4(v4)) => {
             b.push(4);
             b.extend_from_slice(&v4.octets());
@@ -228,7 +246,11 @@ pub fn encode_preamble(route_id: u16, peer: Option<SocketAddr>, replay: &[u8]) -
         }
         None => b.push(0),
     }
-    b.extend_from_slice(&peer.map(|p| p.port()).unwrap_or(0).to_be_bytes());
+    let peer_port = match peer {
+        Some(addr) => addr.port(),
+        None => 0,
+    };
+    b.extend_from_slice(&peer_port.to_be_bytes());
     let rl = replay.len().min(MAX_REPLAY) as u16;
     b.extend_from_slice(&rl.to_be_bytes());
     b.extend_from_slice(&replay[..rl as usize]);
@@ -283,7 +305,10 @@ pub async fn read_preamble<R: AsyncRead + Unpin>(
     if replay_len > 0 {
         r.read_exact(&mut replay).await?;
     }
-    let peer = ip.map(|i| SocketAddr::new(i, port));
+    let peer = match ip {
+        Some(addr) => Some(SocketAddr::new(addr, port)),
+        None => None,
+    };
     Ok((route_id, peer, replay))
 }
 

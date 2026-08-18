@@ -19,10 +19,13 @@ use crate::state::CoreState;
 const INTERNAL_HEADER: &str = "x-internal-secret";
 
 fn check_secret(state: &Arc<CoreState>, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
-    let provided = headers
-        .get(INTERNAL_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let provided = match headers.get(INTERNAL_HEADER) {
+        Some(v) => match v.to_str() {
+            Ok(s) => s,
+            Err(_) => "",
+        },
+        None => "",
+    };
     if provided == state.config.internal_secret {
         Ok(())
     } else {
@@ -52,9 +55,9 @@ async fn list_tunnels(
 ) -> Result<Json<Vec<TunnelView>>, (StatusCode, String)> {
     check_secret(&state, &headers)?;
     let tunnels = state.tunnels.read().await;
-    let out = tunnels
-        .values()
-        .map(|t| TunnelView {
+    let mut out = Vec::new();
+    for t in tunnels.values() {
+        out.push(TunnelView {
             tunnel_id: t.tunnel_id,
             subdomain: t.subdomain.clone(),
             owner_id: t.owner_id,
@@ -63,8 +66,8 @@ async fn list_tunnels(
             has_https: t.has_https,
             bytes_in: t.stats.bytes_in.load(Ordering::Relaxed),
             bytes_out: t.stats.bytes_out.load(Ordering::Relaxed),
-        })
-        .collect();
+        });
+    }
     Ok(Json(out))
 }
 
@@ -79,18 +82,21 @@ async fn stop_tunnel(
     check_secret(&state, &headers)?;
     let info = {
         let tunnels = state.tunnels.read().await;
-        tunnels.get(&subdomain).map(|t| {
-            t.driver_abort.abort();
-            for jh in &t.listener_handles {
-                jh.abort();
+        match tunnels.get(&subdomain) {
+            Some(t) => {
+                t.driver_abort.abort();
+                for jh in &t.listener_handles {
+                    jh.abort();
+                }
+                Some((
+                    t.tunnel_id,
+                    t.public_ports.clone(),
+                    t.udp_ports.clone(),
+                    t.custom_domain.clone(),
+                ))
             }
-            (
-                t.tunnel_id,
-                t.public_ports.clone(),
-                t.udp_ports.clone(),
-                t.custom_domain.clone(),
-            )
-        })
+            None => None,
+        }
     };
     match info {
         Some((tunnel_id, ports, udp_ports, custom_domain)) => {

@@ -48,11 +48,9 @@ pub async fn obtain_token(
 
 async fn login(control_plane: &str, email: &str, password: &str) -> Result<String> {
     let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{control_plane}/api/auth/login"))
-        .json(&serde_json::json!({ "email": email, "password": password }))
-        .send()
-        .await?;
+    let request = client.post(format!("{control_plane}/api/auth/login"));
+    let request = request.json(&serde_json::json!({ "email": email, "password": password }));
+    let resp = request.send().await?;
     if !resp.status().is_success() {
         return Err(anyhow!("login failed: {}", resp.status()));
     }
@@ -63,12 +61,9 @@ async fn login(control_plane: &str, email: &str, password: &str) -> Result<Strin
 
 async fn device_flow(control_plane: &str) -> Result<String> {
     let client = reqwest::Client::new();
-    let start: DeviceStart = client
-        .post(format!("{control_plane}/api/auth/device/start"))
-        .send()
-        .await?
-        .json()
-        .await?;
+    let request = client.post(format!("{control_plane}/api/auth/device/start"));
+    let response = request.send().await?;
+    let start: DeviceStart = response.json().await?;
 
     println!();
     println!("  ┌──────────────────────────────────────────────┐");
@@ -81,17 +76,17 @@ async fn device_flow(control_plane: &str) -> Result<String> {
     let interval = Duration::from_secs(start.interval.max(1) as u64);
     loop {
         tokio::time::sleep(interval).await;
-        let poll: DeviceToken = client
-            .post(format!("{control_plane}/api/auth/device/token"))
-            .json(&serde_json::json!({ "device_code": start.device_code }))
-            .send()
-            .await?
-            .json()
-            .await?;
+        let request = client.post(format!("{control_plane}/api/auth/device/token"));
+        let request = request.json(&serde_json::json!({ "device_code": start.device_code }));
+        let response = request.send().await?;
+        let poll: DeviceToken = response.json().await?;
         match poll.status.as_str() {
             "approved" => {
                 info!("Device authorised");
-                return poll.token.ok_or_else(|| anyhow!("approved without token"));
+                match poll.token {
+                    Some(t) => return Ok(t),
+                    None => return Err(anyhow!("approved without token")),
+                }
             }
             "authorization_pending" => continue,
             other => return Err(anyhow!("device authorization failed: {other}")),

@@ -38,7 +38,14 @@ impl GeoDb {
     }
 
     fn file_mtime(path: &str) -> Option<SystemTime> {
-        std::fs::metadata(path).and_then(|m| m.modified()).ok()
+        let modified = match std::fs::metadata(path) {
+            Ok(m) => m.modified(),
+            Err(e) => Err(e),
+        };
+        match modified {
+            Ok(t) => Some(t),
+            Err(_) => None,
+        }
     }
 
     /// (Re)load the database from disk. Returns true if a reader is now active.
@@ -78,8 +85,18 @@ impl GeoDb {
     pub fn country(&self, ip: IpAddr) -> Option<String> {
         let guard = self.reader.read().unwrap();
         let reader = guard.as_ref()?;
-        let result = reader.lookup(ip).ok()?;
-        let rec: geoip2::Country = result.decode().ok()??;
-        rec.country.iso_code.map(|c| c.to_uppercase())
+        let result = match reader.lookup(ip) {
+            Ok(r) => r,
+            Err(_) => return None,
+        };
+        let decoded = match result.decode() {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        let rec: geoip2::Country = decoded?;
+        match rec.country.iso_code {
+            Some(c) => Some(c.to_uppercase()),
+            None => None,
+        }
     }
 }

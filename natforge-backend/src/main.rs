@@ -5,6 +5,21 @@
 //! API the core proxy reports to, and serving of the static frontend.
 //! Durable state in PostgreSQL, ephemeral state in Redis.
 
+// This workspace is written in an intentionally expanded, one-statement-per-line
+// style: explicit `for`/`match` blocks instead of iterator and Option/Result
+// combinator chains, for readability. Allow the clippy lints that would otherwise
+// push it back toward the terser idiomatic forms.
+#![allow(
+    clippy::manual_map,
+    clippy::manual_filter,
+    clippy::manual_find,
+    clippy::manual_flatten,
+    clippy::manual_unwrap_or,
+    clippy::manual_unwrap_or_default,
+    clippy::needless_range_loop,
+    clippy::comparison_chain
+)]
+
 pub mod config;
 pub mod db;
 pub mod geo;
@@ -64,10 +79,14 @@ async fn serve_page(views_dir: &str, uri: &Uri) -> Response {
         "admin/profile" => "profile",
         other => other,
     };
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
+    let mut name_is_safe = true;
+    for c in name.chars() {
+        if !(c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            name_is_safe = false;
+            break;
+        }
+    }
+    if !name_is_safe {
         return StatusCode::NOT_FOUND.into_response();
     }
     match tokio::fs::read_to_string(format!("{views_dir}/{name}.html")).await {

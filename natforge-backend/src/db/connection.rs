@@ -210,9 +210,20 @@ pub async fn devcode_status(
     } else {
         approved.parse::<i32>().ok()
     };
-    let device_id = device_id_s
-        .filter(|s| !s.is_empty())
-        .and_then(|s| s.parse::<i64>().ok());
+    let device_id_nonempty = match device_id_s {
+        Some(s) => {
+            if !s.is_empty() {
+                Some(s)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let device_id = match device_id_nonempty {
+        Some(s) => s.parse::<i64>().ok(),
+        None => None,
+    };
     Ok(Some(DeviceRecord {
         device_code: stored_device,
         approved_user,

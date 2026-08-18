@@ -2,6 +2,21 @@
 //!
 //!   * `service-host` - expose one or more local services through a reverse tunnel.
 
+// This workspace is written in an intentionally expanded, one-statement-per-line
+// style: explicit `for`/`match` blocks instead of iterator and Option/Result
+// combinator chains, for readability. Allow the clippy lints that would otherwise
+// push it back toward the terser idiomatic forms.
+#![allow(
+    clippy::manual_map,
+    clippy::manual_filter,
+    clippy::manual_find,
+    clippy::manual_flatten,
+    clippy::manual_unwrap_or,
+    clippy::manual_unwrap_or_default,
+    clippy::needless_range_loop,
+    clippy::comparison_chain
+)]
+
 mod auth;
 mod device;
 mod service_host;
@@ -87,12 +102,20 @@ enum Mode {
 fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteSpec>> {
     let mut out = Vec::new();
     for spec in routes {
-        let (port_s, mode_s) = spec.split_once(':').ok_or_else(|| {
-            anyhow!("invalid --route '{spec}', expected <local_port>:<http|https|tcp|udp|both>")
-        })?;
-        let local_port: u16 = port_s
-            .parse()
-            .map_err(|_| anyhow!("invalid port in --route '{spec}'"))?;
+        let (port_s, mode_s) = match spec.split_once(':') {
+            Some(v) => v,
+            None => {
+                return Err(anyhow!(
+                    "invalid --route '{spec}', expected <local_port>:<http|https|tcp|udp|both>"
+                ));
+            }
+        };
+        let local_port: u16 = match port_s.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                return Err(anyhow!("invalid port in --route '{spec}'"));
+            }
+        };
         let mode = match mode_s {
             "http" => RouteMode::Http,
             "https" => RouteMode::Https,
@@ -119,16 +142,25 @@ fn parse_routes(routes: &[String], local_port: Option<u16>) -> Result<Vec<RouteS
 
 /// Path to the per-user systemd unit for the agent.
 fn service_unit_path() -> Result<std::path::PathBuf> {
-    let home = std::env::var("HOME").map_err(|_| anyhow!("HOME is not set"))?;
+    let home = match std::env::var("HOME") {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(anyhow!("HOME is not set"));
+        }
+    };
     Ok(std::path::PathBuf::from(home).join(".config/systemd/user/natforge.service"))
 }
 
 /// Run a command, failing with a clear message (e.g. if systemd is not installed).
 fn sh(cmd: &str, args: &[&str]) -> Result<()> {
-    let status = std::process::Command::new(cmd)
-        .args(args)
-        .status()
-        .map_err(|e| anyhow!("could not run `{cmd}` ({e}); is systemd installed?"))?;
+    let status = match std::process::Command::new(cmd).args(args).status() {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(anyhow!(
+                "could not run `{cmd}` ({e}); is systemd installed?"
+            ));
+        }
+    };
     if !status.success() {
         return Err(anyhow!("`{cmd} {}` failed ({status})", args.join(" ")));
     }
@@ -224,9 +256,10 @@ async fn main() -> Result<()> {
             tunnel_server,
         } => {
             let dev = device::load()?;
-            let cp = control_plane
-                .clone()
-                .unwrap_or_else(|| dev.control_plane.clone());
+            let cp = match control_plane.clone() {
+                Some(v) => v,
+                None => dev.control_plane.clone(),
+            };
             tracing::info!(
                 "running device '{}' (#{}) against {cp}",
                 dev.name,
