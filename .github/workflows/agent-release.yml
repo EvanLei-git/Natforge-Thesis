@@ -43,7 +43,7 @@ jobs:
           key: agent-${{ matrix.target }}
       - name: Install cross (for the musl target)
         if: matrix.cross
-        uses: taiki-e/install-action@v2.85.3
+        uses: taiki-e/install-action@v2.86.1
         with:
           tool: cross
       - name: Build (native gnu)
