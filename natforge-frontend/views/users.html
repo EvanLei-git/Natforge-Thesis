@@ -60,18 +60,15 @@
             } catch (err) { toast(err.message, 'danger'); }
         }
 
-        function stat(label, value, cls, ic) {
-            return `<div class="stat ${cls || ''}"><div class="flex between"><div class="label">${label}</div>${nfIcon(ic)}</div><div class="value">${value}</div></div>`;
-        }
         function renderStats(users) {
             const admins = users.filter(u => u.role === 'admin').length;
             const totalBytes = users.reduce((a, u) => a + u.total_bytes, 0);
             const totalTunnels = users.reduce((a, u) => a + u.tunnel_count, 0);
             document.getElementById('userStats').innerHTML =
-                stat('Users', users.length, '', 'users') +
-                stat('Admins', admins, 'amber', 'admin') +
-                stat('Tunnels', totalTunnels, 'green', 'service') +
-                stat('Total traffic', fmtBytes(totalBytes), '', 'activity');
+                nfStatCard('Users', users.length, '', 'users') +
+                nfStatCard('Admins', admins, 'amber', 'admin') +
+                nfStatCard('Tunnels', totalTunnels, 'green', 'service') +
+                nfStatCard('Total traffic', fmtBytes(totalBytes), '', 'activity');
         }
 
         function routeBadges(t) { return t.routes.map(r => `<span class="badge ${r.mode}">${r.label ? escapeHtml(r.label) + ' ' : ''}${r.mode}:${r.local_port}</span>`).join(' '); }

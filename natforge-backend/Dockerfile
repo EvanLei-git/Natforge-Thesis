@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/*
 LABEL org.opencontainers.image.title="natforge-backend" \
       org.opencontainers.image.description="NatForge control plane. Serves the web dashboard and REST API, handles user authentication and RFC 8628 device-code login, and tracks users, tunnels and agents in Postgres and Redis. The static frontend is baked into the image." \
-      org.opencontainers.image.source="https://github.com/EvanLei-git/Thesis-reverse-proxy"
+      org.opencontainers.image.source="https://github.com/EvanLei-git/Natforge-Thesis"
 COPY --from=builder /natforge-backend /usr/local/bin/natforge-backend
 # The frontend is served from disk by ServeDir; bake it into the image.
 COPY --from=builder /src/natforge-frontend /app/frontend

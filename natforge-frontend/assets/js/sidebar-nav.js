@@ -6,13 +6,6 @@
     if (!host || typeof API === 'undefined' || window.nfDashboardTree) return;
     if (API.role === 'admin') return; // admins use the Network/Users sidebar, not the device tree
 
-    const deviceLabel = (d, i) => (d.name && d.name.trim()) ? d.name.trim() : `Device ${i + 1}`;
-    const svcLabel = (t, i) => {
-        if (t.name && t.name.trim()) return t.name.trim();
-        const l = t.routes.map(r => r.label).find(Boolean);
-        return l || `Service host ${i + 1}`;
-    };
-
     async function render() {
         let devices = [], tunnels = [];
         try { [devices, tunnels] = await Promise.all([API.getDevices(), API.getTunnels()]); }
@@ -23,7 +16,7 @@
             const svcs = byDevice[d.id] || [];
             const rows = svcs.map((t, j) =>
                 `<div class="tree-row tree-service" onclick="location.href='/dashboard?open=${t.tunnel_id}'">
-                    <span class="tree-dot ${t.status}"></span><span class="tree-label">${escapeHtml(svcLabel(t, j))}</span>
+                    <span class="tree-dot ${t.status}"></span><span class="tree-label">${escapeHtml(serviceLabel(t, j))}</span>
                  </div>`).join('');
             return `<div class="tree-device">
                 <div class="tree-row tree-device-row" onclick="location.href='/dashboard?device=${d.id}'">

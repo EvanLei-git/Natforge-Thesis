@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional_with_sizes, split};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -28,27 +28,9 @@ use crate::jwt::verify_tunnel_token;
 use crate::reporter;
 use crate::state::{ActiveTunnel, CoreState, OpenStream, RouteHandle, TunnelStats};
 use natforge_proto::{
-    AgentHello, CoreReply, RouteMode, RouteResult, encode_preamble, read_datagram, write_datagram,
+    AgentHello, CoreReply, ROLE_SERVICE_HOST, RouteMode, RouteResult, encode_preamble,
+    read_datagram, read_frame, write_datagram, write_frame,
 };
-
-const MAX_FRAME: u32 = 1 << 20;
-
-async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
-    let len = stream.read_u32().await?;
-    if len > MAX_FRAME {
-        anyhow::bail!("handshake frame too large ({len} bytes)");
-    }
-    let mut buf = vec![0u8; len as usize];
-    stream.read_exact(&mut buf).await?;
-    Ok(buf)
-}
-
-async fn write_frame<S: AsyncWrite + Unpin>(stream: &mut S, data: &[u8]) -> anyhow::Result<()> {
-    stream.write_u32(data.len() as u32).await?;
-    stream.write_all(data).await?;
-    stream.flush().await?;
-    Ok(())
-}
 
 #[derive(Serialize)]
 struct ErrReply<'a> {
@@ -129,7 +111,7 @@ where
 {
     // 1. Handshake + token verification.
     let hello: AgentHello = serde_json::from_slice(&read_frame(&mut socket).await?)?;
-    if hello.role != "service_host" {
+    if hello.role != ROLE_SERVICE_HOST {
         reject(&mut socket, format!("unsupported role '{}'", hello.role)).await?;
         return Ok(());
     }
@@ -142,8 +124,10 @@ where
     };
 
     // Every binding must correspond to a granted route.
-    let granted: HashMap<u16, &natforge_proto::RouteClaim> =
-        claims.routes.iter().map(|r| (r.route_id, r)).collect();
+    let mut granted: HashMap<u16, &natforge_proto::RouteClaim> = HashMap::new();
+    for r in &claims.routes {
+        granted.insert(r.route_id, r);
+    }
     for b in &hello.routes {
         if !granted.contains_key(&b.route_id) {
             reject(
@@ -168,8 +152,15 @@ where
         let https = state.https_routes.read().await;
         let free_or_ours =
             |existing: Option<i64>| existing.is_none() || existing == Some(tunnel_id);
-        let may_proceed = free_or_ours(http.get(&subdomain).map(|h| h.tunnel_id))
-            && free_or_ours(https.get(&subdomain).map(|h| h.tunnel_id));
+        let http_existing = match http.get(&subdomain) {
+            Some(h) => Some(h.tunnel_id),
+            None => None,
+        };
+        let https_existing = match https.get(&subdomain) {
+            Some(h) => Some(h.tunnel_id),
+            None => None,
+        };
+        let may_proceed = free_or_ours(http_existing) && free_or_ours(https_existing);
         if !may_proceed {
             drop((http, https));
             reject(&mut socket, format!("subdomain {subdomain} already in use")).await?;
@@ -186,7 +177,10 @@ where
             RouteMode::Http => format!("{}.{}:{}", subdomain, cfg.public_host, cfg.http_port),
             RouteMode::Https => format!("{}.{}:{}", subdomain, cfg.public_host, cfg.https_port),
             RouteMode::Tcp => {
-                let port = r.public_port.unwrap_or(0);
+                let port = match r.public_port {
+                    Some(p) => p,
+                    None => 0,
+                };
                 match TcpListener::bind(format!("0.0.0.0:{port}")).await {
                     Ok(l) => tcp_listeners.push((r.route_id, port, l)),
                     Err(e) => {
@@ -201,7 +195,10 @@ where
                 format!("{}:{}", cfg.public_host, port)
             }
             RouteMode::Udp => {
-                let port = r.public_port.unwrap_or(0);
+                let port = match r.public_port {
+                    Some(p) => p,
+                    None => 0,
+                };
                 match UdpSocket::bind(format!("0.0.0.0:{port}")).await {
                     Ok(s) => udp_sockets.push((r.route_id, port, s)),
                     Err(e) => {
@@ -233,17 +230,18 @@ where
     }
 
     // 4. Acknowledge, then upgrade to yamux.
+    let mut reply_routes = Vec::new();
+    for p in &planned {
+        reply_routes.push(RouteResult {
+            route_id: p.route_id,
+            mode: p.mode,
+            public_endpoint: p.public_endpoint.clone(),
+        });
+    }
     let reply = CoreReply::Ok {
         tunnel_id,
         subdomain: subdomain.clone(),
-        routes: planned
-            .iter()
-            .map(|p| RouteResult {
-                route_id: p.route_id,
-                mode: p.mode,
-                public_endpoint: p.public_endpoint.clone(),
-            })
-            .collect(),
+        routes: reply_routes,
     };
     write_frame(&mut socket, &serde_json::to_vec(&reply)?).await?;
 
@@ -253,7 +251,10 @@ where
     );
 
     let (open_tx, open_rx) = mpsc::channel::<OpenStream>(256);
-    let conn = Connection::new(socket.compat(), YamuxConfig::default(), Mode::Client);
+    // Larger yamux send frames cut per-frame overhead on bulk transfers (throughput tuning).
+    let mut ycfg = YamuxConfig::default();
+    ycfg.set_split_send_size(64 * 1024);
+    let conn = Connection::new(socket.compat(), ycfg, Mode::Client);
     let driver = tokio::spawn(mux::run_client_driver(conn, open_rx));
     let driver_abort = driver.abort_handle();
 
@@ -307,14 +308,23 @@ where
                     .insert(subdomain.clone(), handle);
             }
             RouteMode::Tcp => {
-                let port = p.public_port.unwrap_or(0);
+                let port = match p.public_port {
+                    Some(pp) => pp,
+                    None => 0,
+                };
                 public_ports.push(port);
                 state.port_routes.write().await.insert(port, handle.clone());
                 // find the pre-bound listener for this route
-                if let Some(idx) = tcp_listeners
-                    .iter()
-                    .position(|(rid, _, _)| *rid == p.route_id)
-                {
+                let mut found = None;
+                let mut i = 0;
+                for (rid, _, _) in &tcp_listeners {
+                    if *rid == p.route_id {
+                        found = Some(i);
+                        break;
+                    }
+                    i += 1;
+                }
+                if let Some(idx) = found {
                     let (_, _, listener) = tcp_listeners.remove(idx);
                     let st = state.clone();
                     let h = handle.clone();
@@ -323,13 +333,22 @@ where
                 }
             }
             RouteMode::Udp => {
-                let port = p.public_port.unwrap_or(0);
+                let port = match p.public_port {
+                    Some(pp) => pp,
+                    None => 0,
+                };
                 udp_ports.push(port);
                 state.udp_routes.write().await.insert(port, handle.clone());
-                if let Some(idx) = udp_sockets
-                    .iter()
-                    .position(|(rid, _, _)| *rid == p.route_id)
-                {
+                let mut found = None;
+                let mut i = 0;
+                for (rid, _, _) in &udp_sockets {
+                    if *rid == p.route_id {
+                        found = Some(i);
+                        break;
+                    }
+                    i += 1;
+                }
+                if let Some(idx) = found {
                     let (_, _, sock) = udp_sockets.remove(idx);
                     let st = state.clone();
                     let h = handle.clone();
@@ -467,20 +486,32 @@ pub(crate) async fn teardown(
     };
     {
         let mut http = state.http_routes.write().await;
-        if http.get(subdomain).map(|h| h.tunnel_id) == Some(tunnel_id) {
+        let existing = match http.get(subdomain) {
+            Some(h) => Some(h.tunnel_id),
+            None => None,
+        };
+        if existing == Some(tunnel_id) {
             http.remove(subdomain);
         }
     }
     {
         let mut https = state.https_routes.write().await;
-        if https.get(subdomain).map(|h| h.tunnel_id) == Some(tunnel_id) {
+        let existing = match https.get(subdomain) {
+            Some(h) => Some(h.tunnel_id),
+            None => None,
+        };
+        if existing == Some(tunnel_id) {
             https.remove(subdomain);
         }
     }
     {
         let mut pr = state.port_routes.write().await;
         for port in ports {
-            if pr.get(port).map(|h| h.tunnel_id) == Some(tunnel_id) {
+            let existing = match pr.get(port) {
+                Some(h) => Some(h.tunnel_id),
+                None => None,
+            };
+            if existing == Some(tunnel_id) {
                 pr.remove(port);
             }
         }
@@ -488,19 +519,31 @@ pub(crate) async fn teardown(
     {
         let mut ur = state.udp_routes.write().await;
         for port in udp_ports {
-            if ur.get(port).map(|h| h.tunnel_id) == Some(tunnel_id) {
+            let existing = match ur.get(port) {
+                Some(h) => Some(h.tunnel_id),
+                None => None,
+            };
+            if existing == Some(tunnel_id) {
                 ur.remove(port);
             }
         }
     }
     if let Some(cd) = custom_domain {
         let mut ch = state.custom_http.write().await;
-        if ch.get(cd).map(|h| h.tunnel_id) == Some(tunnel_id) {
+        let existing = match ch.get(cd) {
+            Some(h) => Some(h.tunnel_id),
+            None => None,
+        };
+        if existing == Some(tunnel_id) {
             ch.remove(cd);
         }
         drop(ch);
         let mut cs = state.custom_https.write().await;
-        if cs.get(cd).map(|h| h.tunnel_id) == Some(tunnel_id) {
+        let existing = match cs.get(cd) {
+            Some(h) => Some(h.tunnel_id),
+            None => None,
+        };
+        if existing == Some(tunnel_id) {
             cs.remove(cd);
         }
     }
@@ -577,7 +620,7 @@ async fn bridge_public_connection(
         return;
     }
     let start = std::time::Instant::now();
-    match copy_bidirectional(&mut inbound, &mut outbound).await {
+    match copy_bidirectional_with_sizes(&mut inbound, &mut outbound, 65536, 65536).await {
         Ok((to_agent, from_agent)) => {
             handle.stats.bytes_in.fetch_add(to_agent, Ordering::Relaxed);
             handle

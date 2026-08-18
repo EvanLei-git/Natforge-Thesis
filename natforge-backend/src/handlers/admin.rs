@@ -20,9 +20,7 @@ fn require_admin(user: &AuthUser) -> Result<(), (StatusCode, String)> {
     }
 }
 
-fn err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-}
+use crate::handlers::err;
 
 pub async fn get_region_blocks(
     State(state): State<SharedState>,
@@ -212,7 +210,18 @@ pub async fn update_node(
     Json(p): Json<UpdateNodeReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_admin(&user)?;
-    let region = p.region.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let region_deref = p.region.as_deref();
+    let region_trimmed = region_deref.map(str::trim);
+    let region = match region_trimmed {
+        Some(s) => {
+            if !s.is_empty() {
+                Some(s)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
     queries::update_node(&state.db.pg, &node_id, p.name.trim(), region, p.active)
         .await
         .map_err(err)?;

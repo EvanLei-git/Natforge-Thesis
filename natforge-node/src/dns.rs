@@ -123,13 +123,15 @@ impl CloudflareManager {
 
     /// Attach the bearer token, send, and parse the JSON envelope.
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<serde_json::Value, String> {
-        let resp = req
-            .bearer_auth(&self.api_token)
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        resp.json::<serde_json::Value>()
-            .await
-            .map_err(|e| e.to_string())
+        let sent = req.bearer_auth(&self.api_token).send().await;
+        let resp = match sent {
+            Ok(r) => r,
+            Err(e) => return Err(e.to_string()),
+        };
+        let parsed = resp.json::<serde_json::Value>().await;
+        match parsed {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.to_string()),
+        }
     }
 }

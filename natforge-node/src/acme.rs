@@ -51,9 +51,11 @@ impl ResolvesServerCert for CertStore {
 
 /// Build a rustls `CertifiedKey` from a PEM cert chain + private key.
 pub fn certified_key(cert_pem: &str, key_pem: &str) -> anyhow::Result<Arc<CertifiedKey>> {
-    let certs = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
-        .collect::<Result<Vec<_>, _>>()
-        .context("parse ACME cert chain")?;
+    let mut certs = Vec::new();
+    for cert in CertificateDer::pem_slice_iter(cert_pem.as_bytes()) {
+        let cert = cert.context("parse ACME cert chain")?;
+        certs.push(cert);
+    }
     anyhow::ensure!(!certs.is_empty(), "empty ACME cert chain");
     let key = PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).context("parse ACME key")?;
     let signing_key =
@@ -166,8 +168,10 @@ pub async fn issue_certificate(
                 None => tokio::time::sleep(std::time::Duration::from_secs(1)).await,
             }
         }
-        let cert_pem =
-            cert_pem.ok_or_else(|| anyhow::anyhow!("certificate not ready after finalize"))?;
+        let cert_pem = match cert_pem {
+            Some(c) => c,
+            None => return Err(anyhow::anyhow!("certificate not ready after finalize")),
+        };
         anyhow::Ok((cert_pem, key_pem))
     }
     .await;
@@ -208,13 +212,16 @@ impl AcmeState {
         email: String,
         dir: impl Into<PathBuf>,
     ) -> anyhow::Result<Arc<Self>> {
-        let directory_url = directory_override.unwrap_or_else(|| {
-            if staging {
-                LetsEncrypt::Staging.url().to_string()
-            } else {
-                LetsEncrypt::Production.url().to_string()
+        let directory_url = match directory_override {
+            Some(url) => url,
+            None => {
+                if staging {
+                    LetsEncrypt::Staging.url().to_string()
+                } else {
+                    LetsEncrypt::Production.url().to_string()
+                }
             }
-        });
+        };
         let store = Arc::new(CertStore::default());
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let config = rustls::ServerConfig::builder_with_provider(provider)
@@ -266,7 +273,11 @@ impl AcmeState {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -334,7 +345,11 @@ impl AcmeState {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -342,12 +357,25 @@ impl AcmeState {
             let Some(domain) = entry.file_name().to_str().map(str::to_string) else {
                 continue;
             };
-            let age_days = std::fs::metadata(path.join("cert.pem"))
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.elapsed().ok())
-                .map(|d| d.as_secs() / 86400)
-                .unwrap_or(0);
+            let modified = match std::fs::metadata(path.join("cert.pem")) {
+                Ok(m) => m.modified(),
+                Err(e) => Err(e),
+            };
+            let modified = match modified {
+                Ok(t) => Some(t),
+                Err(_) => None,
+            };
+            let elapsed = match modified {
+                Some(t) => match t.elapsed() {
+                    Ok(d) => Some(d),
+                    Err(_) => None,
+                },
+                None => None,
+            };
+            let age_days = match elapsed {
+                Some(d) => d.as_secs() / 86400,
+                None => 0,
+            };
             if age_days >= 60 {
                 info!("renewing ACME cert for '{domain}' ({age_days} days old)");
                 if let Err(e) = self.issue_and_store(&domain).await {

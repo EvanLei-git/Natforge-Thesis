@@ -20,6 +20,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/*
 LABEL org.opencontainers.image.title="natforge-node" \
       org.opencontainers.image.description="NatForge data plane. Terminates public HTTP, HTTPS and raw TCP traffic and relays it over multiplexed yamux tunnels to agents running behind NAT or CGNAT, making services on private networks reachable from the internet." \
-      org.opencontainers.image.source="https://github.com/EvanLei-git/Thesis-reverse-proxy"
+      org.opencontainers.image.source="https://github.com/EvanLei-git/Natforge-Thesis"
 COPY --from=builder /natforge-node /usr/local/bin/natforge-node
 ENTRYPOINT ["/usr/local/bin/natforge-node"]

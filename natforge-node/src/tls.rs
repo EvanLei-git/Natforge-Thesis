@@ -62,10 +62,13 @@ pub fn fingerprint_of(cert: &CertificateDer<'_>) -> String {
 pub fn load_wildcard_acceptor(cert_path: &str, key_path: &str) -> anyhow::Result<TlsAcceptor> {
     use rustls::pki_types::pem::PemObject;
 
-    let certs = CertificateDer::pem_file_iter(cert_path)
-        .with_context(|| format!("read {cert_path}"))?
-        .collect::<Result<Vec<CertificateDer<'static>>, _>>()
-        .context("parse certificate chain")?;
+    let cert_iter =
+        CertificateDer::pem_file_iter(cert_path).with_context(|| format!("read {cert_path}"))?;
+    let mut certs: Vec<CertificateDer<'static>> = Vec::new();
+    for cert in cert_iter {
+        let cert = cert.context("parse certificate chain")?;
+        certs.push(cert);
+    }
     if certs.is_empty() {
         anyhow::bail!("no certificates found in {cert_path}");
     }

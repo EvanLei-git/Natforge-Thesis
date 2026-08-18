@@ -4,6 +4,23 @@
 //! shared HTTP :80 and HTTPS :443 subdomain routers, and dedicated TCP ports per
 //! raw route. Also exposes a small internal API and periodically refreshes policy.
 
+// This workspace is written in an intentionally expanded, one-statement-per-line
+// style: explicit `for`/`match` blocks instead of iterator and Option/Result
+// combinator chains, for readability. Allow the clippy lints that would otherwise
+// push it back toward the terser idiomatic forms.
+#![allow(
+    clippy::manual_map,
+    clippy::manual_filter,
+    clippy::manual_find,
+    clippy::manual_flatten,
+    clippy::manual_unwrap_or,
+    clippy::manual_unwrap_or_default,
+    clippy::manual_ok_err,
+    clippy::explicit_counter_loop,
+    clippy::needless_range_loop,
+    clippy::comparison_chain
+)]
+
 pub mod acme;
 pub mod api;
 pub mod config;
@@ -87,7 +104,16 @@ async fn main() -> anyhow::Result<()> {
     ) {
         let st = state.clone();
         tokio::spawn(async move {
-            let mtime = || std::fs::metadata(&cert).and_then(|m| m.modified()).ok();
+            let mtime = || {
+                let modified = match std::fs::metadata(&cert) {
+                    Ok(m) => m.modified(),
+                    Err(e) => Err(e),
+                };
+                match modified {
+                    Ok(t) => Some(t),
+                    Err(_) => None,
+                }
+            };
             let mut last = mtime();
             let mut ticker = tokio::time::interval(Duration::from_secs(3600));
             loop {

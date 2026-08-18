@@ -1,4 +1,4 @@
-[![CI](https://github.com/EvanLei-git/Thesis-reverse-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/EvanLei-git/Thesis-reverse-proxy/actions/workflows/ci.yml)
+[![CI](https://github.com/EvanLei-git/Natforge-Thesis/actions/workflows/ci.yml/badge.svg)](https://github.com/EvanLei-git/Natforge-Thesis/actions/workflows/ci.yml)
 
 # <img width="50" alt="natforge_flake" src="https://github.com/user-attachments/assets/a8279cf8-234f-4cb0-9d57-f9e6fddeed85" />  NatForge - Thesis
 
@@ -92,7 +92,7 @@ Each of `natforge-frontend`, `natforge-backend`, `natforge-node`, and `natforge-
 
 Install the prebuilt agent:
 ```sh
-curl -L https://github.com/EvanLei-git/Thesis-reverse-proxy/releases/latest/download/natforge-x86_64-linux-musl -o natforge && chmod +x natforge
+curl -L https://github.com/EvanLei-git/Natforge-Thesis/releases/latest/download/natforge-x86_64-linux-musl -o natforge && chmod +x natforge
 ```
 
 ## Deployment and hosting

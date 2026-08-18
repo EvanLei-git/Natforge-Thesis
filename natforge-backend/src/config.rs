@@ -25,29 +25,61 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Self {
+        let port = env_u16("PORT", 3000);
+        let domain = match env::var("NATFORGE_DOMAIN") {
+            Ok(v) => v,
+            Err(_) => "natforge.com".to_string(),
+        };
+        let core_url = match env::var("CORE_URL") {
+            Ok(v) => v,
+            Err(_) => "http://127.0.0.1:3001".to_string(),
+        };
+        let jwt_secret = match env::var("JWT_SECRET") {
+            Ok(v) => v,
+            Err(_) => "natforge-dev-secret-change-me".to_string(),
+        };
+        let internal_secret = match env::var("INTERNAL_SECRET") {
+            Ok(v) => v,
+            Err(_) => "natforge-internal-dev-secret".to_string(),
+        };
+        let frontend_dir = match env::var("FRONTEND_DIR") {
+            Ok(v) => v,
+            Err(_) => "natforge-frontend".to_string(),
+        };
+        let database_url = match env::var("DATABASE_URL") {
+            Ok(v) => v,
+            Err(_) => "postgres://natforge:natforge@127.0.0.1:5432/natforge".to_string(),
+        };
+        let redis_url = match env::var("REDIS_URL") {
+            Ok(v) => v,
+            Err(_) => "redis://127.0.0.1:6379".to_string(),
+        };
+        let geoip_db = match env::var("GEOIP_DB") {
+            Ok(v) => v,
+            Err(_) => String::new(),
+        };
         Config {
-            port: env_u16("PORT", 3000),
-            domain: env::var("NATFORGE_DOMAIN").unwrap_or_else(|_| "natforge.com".to_string()),
-            core_url: env::var("CORE_URL").unwrap_or_else(|_| "http://127.0.0.1:3001".to_string()),
-            jwt_secret: env::var("JWT_SECRET")
-                .unwrap_or_else(|_| "natforge-dev-secret-change-me".to_string()),
-            internal_secret: env::var("INTERNAL_SECRET")
-                .unwrap_or_else(|_| "natforge-internal-dev-secret".to_string()),
-            frontend_dir: env::var("FRONTEND_DIR")
-                .unwrap_or_else(|_| "natforge-frontend".to_string()),
-            database_url: env::var("DATABASE_URL").unwrap_or_else(|_| {
-                "postgres://natforge:natforge@127.0.0.1:5432/natforge".to_string()
-            }),
-            redis_url: env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
-            geoip_db: env::var("GEOIP_DB").unwrap_or_default(),
+            port,
+            domain,
+            core_url,
+            jwt_secret,
+            internal_secret,
+            frontend_dir,
+            database_url,
+            redis_url,
+            geoip_db,
         }
     }
 }
 
 fn env_u16(key: &str, default: u16) -> u16 {
-    env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
+    let raw = env::var(key);
+    let parsed = match raw {
+        Ok(v) => v.parse().ok(),
+        Err(_) => None,
+    };
+    match parsed {
+        Some(n) => n,
+        None => default,
+    }
 }

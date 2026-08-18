@@ -17,19 +17,18 @@ use crate::db::queries;
 use crate::jwt::{AuthUser, issue_device_token};
 use crate::models::Device;
 
-fn db_err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("database error: {e}"),
-    )
-}
+use crate::handlers::db_err;
 
 /// A fresh random string from `charset` (own RNG, so callers never share a borrow).
 fn random_from(charset: &[u8], n: usize) -> String {
     let mut rng = rand::thread_rng();
-    (0..n)
-        .map(|_| charset[rng.gen_range(0..charset.len())] as char)
-        .collect()
+    let mut out = String::new();
+    for _ in 0..n {
+        let idx = rng.gen_range(0..charset.len());
+        let ch = charset[idx] as char;
+        out.push(ch);
+    }
+    out
 }
 
 const HEX: &[u8] = b"0123456789abcdef";
@@ -85,16 +84,20 @@ pub async fn enroll_approve(
     headers: axum::http::HeaderMap,
     Json(payload): Json<EnrollApproveReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let ip = crate::geo::client_ip(&headers)
-        .map(|i| i.to_string())
-        .unwrap_or_else(|| "unknown".into());
-    let ok_ip =
-        connection::rate_limit_hit(&state.db.redis, &format!("nf:enrollrl:ip:{ip}"), 10, 60)
-            .await
-            .unwrap_or(true);
-    let ok_all = connection::rate_limit_hit(&state.db.redis, "nf:enrollrl:all", 120, 60)
-        .await
-        .unwrap_or(true);
+    let ip = match crate::geo::client_ip(&headers) {
+        Some(i) => i.to_string(),
+        None => "unknown".into(),
+    };
+    let ip_key = format!("nf:enrollrl:ip:{ip}");
+    let ok_ip = match connection::rate_limit_hit(&state.db.redis, &ip_key, 10, 60).await {
+        Ok(v) => v,
+        Err(_) => true,
+    };
+    let ok_all = match connection::rate_limit_hit(&state.db.redis, "nf:enrollrl:all", 120, 60).await
+    {
+        Ok(v) => v,
+        Err(_) => true,
+    };
     if !ok_ip || !ok_all {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
@@ -105,21 +108,43 @@ pub async fn enroll_approve(
     // Link an existing owned device, or create a fresh one to bind the code to.
     let (device_id, created, name) = match payload.device_id {
         Some(did) => {
-            let dev = queries::device_by_id(&state.db.pg, did)
+            let dev_opt = queries::device_by_id(&state.db.pg, did)
                 .await
-                .map_err(db_err)?
-                .filter(|d| d.owner_id == user.user_id)
-                .ok_or((StatusCode::NOT_FOUND, "device not found".to_string()))?;
+                .map_err(db_err)?;
+            let dev_owned = match dev_opt {
+                Some(d) => {
+                    if d.owner_id == user.user_id {
+                        Some(d)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            };
+            let dev = match dev_owned {
+                Some(d) => d,
+                None => return Err((StatusCode::NOT_FOUND, "device not found".to_string())),
+            };
             (did, false, dev.name)
         }
         None => {
-            let name = payload
-                .name
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .unwrap_or("device")
-                .to_string();
+            let name_deref = payload.name.as_deref();
+            let name_trimmed = name_deref.map(str::trim);
+            let name_nonempty = match name_trimmed {
+                Some(s) => {
+                    if !s.is_empty() {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            };
+            let name_ref = match name_nonempty {
+                Some(s) => s,
+                None => "device",
+            };
+            let name = name_ref.to_string();
             let dev = queries::create_device(&state.db.pg, user.user_id, &name)
                 .await
                 .map_err(db_err)?;
@@ -177,11 +202,13 @@ pub async fn enroll_token(
         .await
         .map_err(db_err)?;
     let token = issue_device_token(&state.config.jwt_secret, owner, device_id, &nonce);
-    let name = queries::device_by_id(&state.db.pg, device_id)
+    let device_opt = queries::device_by_id(&state.db.pg, device_id)
         .await
-        .map_err(db_err)?
-        .map(|d| d.name)
-        .unwrap_or_default();
+        .map_err(db_err)?;
+    let name = match device_opt {
+        Some(d) => d.name,
+        None => String::new(),
+    };
     Ok(Json(json!({
         "status": "approved",
         "device_token": token,
@@ -207,13 +234,23 @@ pub async fn create_device(
     user: AuthUser,
     Json(payload): Json<CreateDeviceReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let name = payload
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("device")
-        .to_string();
+    let name_deref = payload.name.as_deref();
+    let name_trimmed = name_deref.map(str::trim);
+    let name_nonempty = match name_trimmed {
+        Some(s) => {
+            if !s.is_empty() {
+                Some(s)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let name_ref = match name_nonempty {
+        Some(s) => s,
+        None => "device",
+    };
+    let name = name_ref.to_string();
     let device = queries::create_device(&state.db.pg, user.user_id, &name)
         .await
         .map_err(db_err)?;

@@ -39,7 +39,10 @@ impl GeoDb {
         let reader = self.reader.as_ref()?;
         let result = reader.lookup(ip).ok()?;
         let rec: geoip2::Country = result.decode().ok()??;
-        rec.country.iso_code.map(|c| c.to_uppercase())
+        match rec.country.iso_code {
+            Some(c) => Some(c.to_uppercase()),
+            None => None,
+        }
     }
 
     /// Resolve the caller's country from forwarded-IP headers (set by the edge /
@@ -53,14 +56,20 @@ impl GeoDb {
 
 /// Best-effort client IP from proxy headers. None for direct/local connections.
 pub fn client_ip(headers: &HeaderMap) -> Option<IpAddr> {
-    if let Some(v) = headers
-        .get("cf-connecting-ip")
-        .and_then(|h| h.to_str().ok())
+    let cf_str = match headers.get("cf-connecting-ip") {
+        Some(h) => h.to_str().ok(),
+        None => None,
+    };
+    if let Some(v) = cf_str
         && let Ok(ip) = v.trim().parse()
     {
         return Some(ip);
     }
-    if let Some(v) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok())
+    let xff_str = match headers.get("x-forwarded-for") {
+        Some(h) => h.to_str().ok(),
+        None => None,
+    };
+    if let Some(v) = xff_str
         && let Some(first) = v.split(',').next()
         && let Ok(ip) = first.trim().parse()
     {

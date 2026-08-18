@@ -34,7 +34,12 @@ struct EnrollPoll {
 }
 
 fn config_dir() -> Result<PathBuf> {
-    let home = std::env::var("HOME").map_err(|_| anyhow!("HOME is not set"))?;
+    let home = match std::env::var("HOME") {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(anyhow!("HOME is not set"));
+        }
+    };
     Ok(PathBuf::from(home).join(".config").join("natforge"))
 }
 
@@ -71,12 +76,9 @@ pub fn save(dev: &StoredDevice) -> Result<()> {
 /// dashboard, and poll until a device token comes back.
 pub async fn enroll(control_plane: &str) -> Result<StoredDevice> {
     let client = reqwest::Client::new();
-    let start: EnrollStart = client
-        .post(format!("{control_plane}/api/devices/enroll/start"))
-        .send()
-        .await?
-        .json()
-        .await?;
+    let request = client.post(format!("{control_plane}/api/devices/enroll/start"));
+    let response = request.send().await?;
+    let start: EnrollStart = response.json().await?;
 
     println!();
     println!("  To add this device, open your NatForge dashboard:");
@@ -89,22 +91,28 @@ pub async fn enroll(control_plane: &str) -> Result<StoredDevice> {
     let interval = Duration::from_secs(start.interval.max(1) as u64);
     loop {
         tokio::time::sleep(interval).await;
-        let poll: EnrollPoll = client
-            .post(format!("{control_plane}/api/devices/enroll/token"))
-            .json(&serde_json::json!({ "device_code": start.device_code }))
-            .send()
-            .await?
-            .json()
-            .await?;
+        let request = client.post(format!("{control_plane}/api/devices/enroll/token"));
+        let request = request.json(&serde_json::json!({ "device_code": start.device_code }));
+        let response = request.send().await?;
+        let poll: EnrollPoll = response.json().await?;
         match poll.status.as_str() {
             "approved" => {
-                let device_token = poll
-                    .device_token
-                    .ok_or_else(|| anyhow!("approved without a token"))?;
-                let device_id = poll
-                    .device_id
-                    .ok_or_else(|| anyhow!("approved without a device id"))?;
-                let name = poll.name.unwrap_or_else(|| "device".to_string());
+                let device_token = match poll.device_token {
+                    Some(v) => v,
+                    None => {
+                        return Err(anyhow!("approved without a token"));
+                    }
+                };
+                let device_id = match poll.device_id {
+                    Some(v) => v,
+                    None => {
+                        return Err(anyhow!("approved without a device id"));
+                    }
+                };
+                let name = match poll.name {
+                    Some(v) => v,
+                    None => "device".to_string(),
+                };
                 info!("device '{name}' (#{device_id}) enrolled");
                 return Ok(StoredDevice {
                     control_plane: control_plane.to_string(),

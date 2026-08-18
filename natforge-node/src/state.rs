@@ -169,14 +169,33 @@ impl CoreState {
     /// unknown country (no GeoIP data) is always allowed - we never block blindly.
     pub async fn is_country_blocked(&self, tunnel_id: i64, country: Option<&str>) -> bool {
         let Some(cc) = country else { return false };
-        if self.blocked_regions.read().await.iter().any(|c| c == cc) {
-            return true;
+        {
+            let blocked = self.blocked_regions.read().await;
+            let mut found = false;
+            for c in blocked.iter() {
+                if c == cc {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                return true;
+            }
         }
-        self.tunnel_region_blocks
-            .read()
-            .await
-            .get(&tunnel_id)
-            .is_some_and(|list| list.iter().any(|c| c == cc))
+        let tunnel_blocks = self.tunnel_region_blocks.read().await;
+        match tunnel_blocks.get(&tunnel_id) {
+            Some(list) => {
+                let mut found = false;
+                for c in list.iter() {
+                    if c == cc {
+                        found = true;
+                        break;
+                    }
+                }
+                found
+            }
+            None => false,
+        }
     }
 }
 

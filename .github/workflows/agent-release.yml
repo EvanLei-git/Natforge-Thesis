@@ -85,7 +85,7 @@ jobs:
 
             Install (static build, works anywhere):
             ```sh
-            curl -L https://github.com/EvanLei-git/Thesis-reverse-proxy/releases/download/latest/natforge-x86_64-linux-musl -o natforge
+            curl -L https://github.com/EvanLei-git/Natforge-Thesis/releases/download/latest/natforge-x86_64-linux-musl -o natforge
             chmod +x natforge
             ./natforge enroll --control-plane https://natforge.com   # prints a code; enter it in the dashboard (Add device)
             ./natforge run   # then serves the service hosts you configure in the dashboard

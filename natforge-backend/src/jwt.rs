@@ -70,13 +70,32 @@ pub fn issue_tunnel_token(
 
 pub fn verify_session(secret: &str, token: &str) -> Result<SessionClaims, String> {
     let validation = Validation::new(Algorithm::HS256);
-    decode::<SessionClaims>(
+    let decoded = decode::<SessionClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &validation,
-    )
-    .map(|d| d.claims)
-    .map_err(|e| e.to_string())
+    );
+    match decoded {
+        Ok(d) => Ok(d.claims),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Pull the raw token out of an `Authorization: Bearer <token>` header.
+fn bearer_token(parts: &Parts) -> Result<&str, (StatusCode, &'static str)> {
+    let auth_value = parts.headers.get(axum::http::header::AUTHORIZATION);
+    let auth_str = match auth_value {
+        Some(v) => v.to_str().ok(),
+        None => None,
+    };
+    let header = match auth_str {
+        Some(h) => h,
+        None => return Err((StatusCode::UNAUTHORIZED, "missing authorization header")),
+    };
+    match header.strip_prefix("Bearer ") {
+        Some(rest) => Ok(rest),
+        None => Err((StatusCode::UNAUTHORIZED, "malformed authorization header")),
+    }
 }
 
 /// Authenticated user, extracted from the `Authorization: Bearer` header.
@@ -94,16 +113,11 @@ impl FromRequestParts<crate::db::connection::SharedState> for AuthUser {
         parts: &mut Parts,
         state: &crate::db::connection::SharedState,
     ) -> Result<Self, Self::Rejection> {
-        let header = parts
-            .headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .ok_or((StatusCode::UNAUTHORIZED, "missing authorization header"))?;
-        let token = header
-            .strip_prefix("Bearer ")
-            .ok_or((StatusCode::UNAUTHORIZED, "malformed authorization header"))?;
-        let claims = verify_session(&state.config.jwt_secret, token)
-            .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid or expired token"))?;
+        let token = bearer_token(parts)?;
+        let claims = match verify_session(&state.config.jwt_secret, token) {
+            Ok(c) => c,
+            Err(_) => return Err((StatusCode::UNAUTHORIZED, "invalid or expired token")),
+        };
         Ok(AuthUser {
             user_id: claims.sub,
             email: claims.email,
@@ -145,13 +159,15 @@ pub fn issue_device_token(secret: &str, owner_id: i32, device_id: i64, nonce: &s
 
 pub fn verify_device_token(secret: &str, token: &str) -> Result<DeviceClaims, String> {
     let validation = Validation::new(Algorithm::HS256);
-    let claims = decode::<DeviceClaims>(
+    let decoded = decode::<DeviceClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &validation,
-    )
-    .map(|d| d.claims)
-    .map_err(|e| e.to_string())?;
+    );
+    let claims = match decoded {
+        Ok(d) => d.claims,
+        Err(e) => return Err(e.to_string()),
+    };
     if claims.purpose != "device" {
         return Err("not a device token".to_string());
     }
@@ -173,20 +189,20 @@ impl FromRequestParts<crate::db::connection::SharedState> for DeviceAuth {
         parts: &mut Parts,
         state: &crate::db::connection::SharedState,
     ) -> Result<Self, Self::Rejection> {
-        let header = parts
-            .headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .ok_or((StatusCode::UNAUTHORIZED, "missing authorization header"))?;
-        let token = header
-            .strip_prefix("Bearer ")
-            .ok_or((StatusCode::UNAUTHORIZED, "malformed authorization header"))?;
-        let claims = verify_device_token(&state.config.jwt_secret, token)
-            .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid device token"))?;
-        let device = crate::db::queries::device_by_id(&state.db.pg, claims.device_id)
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "database error"))?
-            .ok_or((StatusCode::UNAUTHORIZED, "device not found"))?;
+        let token = bearer_token(parts)?;
+        let claims = match verify_device_token(&state.config.jwt_secret, token) {
+            Ok(c) => c,
+            Err(_) => return Err((StatusCode::UNAUTHORIZED, "invalid device token")),
+        };
+        let device_row = crate::db::queries::device_by_id(&state.db.pg, claims.device_id).await;
+        let device_opt = match device_row {
+            Ok(d) => d,
+            Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "database error")),
+        };
+        let device = match device_opt {
+            Some(d) => d,
+            None => return Err((StatusCode::UNAUTHORIZED, "device not found")),
+        };
         if device.token_fp.as_deref() != Some(claims.nonce.as_str()) {
             return Err((StatusCode::UNAUTHORIZED, "device token revoked"));
         }

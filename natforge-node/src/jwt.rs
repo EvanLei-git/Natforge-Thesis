@@ -10,12 +10,15 @@ pub use natforge_proto::{RouteClaim, TunnelClaims};
 /// Verify a tunnel token and return its claims, or an error string.
 pub fn verify_tunnel_token(token: &str, secret: &str) -> Result<TunnelClaims, String> {
     let validation = Validation::new(Algorithm::HS256); // requires `exp`
-    let data = decode::<TunnelClaims>(
+    let decoded = decode::<TunnelClaims>(
         token,
         &DecodingKey::from_secret(secret.as_bytes()),
         &validation,
-    )
-    .map_err(|e| format!("invalid tunnel token: {e}"))?;
+    );
+    let data = match decoded {
+        Ok(d) => d,
+        Err(e) => return Err(format!("invalid tunnel token: {e}")),
+    };
     data.claims.validate_shape()?;
     Ok(data.claims)
 }

@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, copy_bidirectional, split};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, copy_bidirectional_with_sizes, split};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::task::JoinHandle;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -24,28 +24,9 @@ use yamux::{Config as YamuxConfig, Connection, Mode};
 // the agent and core can never drift; the agent only *reads* preambles (the core
 // writes them) and exchanges two length-prefixed JSON frames before the yamux upgrade.
 use natforge_proto::{
-    AgentHello, AgentRouteBinding, CoreReply, RouteMode, read_datagram, read_preamble,
-    write_datagram,
+    AgentHello, AgentRouteBinding, CoreReply, ROLE_SERVICE_HOST, RouteMode, read_datagram,
+    read_frame, read_preamble, write_datagram, write_frame,
 };
-
-const MAX_FRAME: u32 = 1 << 20;
-
-async fn read_frame<S: AsyncRead + Unpin>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
-    let len = stream.read_u32().await?;
-    if len > MAX_FRAME {
-        anyhow::bail!("frame too large ({len} bytes)");
-    }
-    let mut buf = vec![0u8; len as usize];
-    stream.read_exact(&mut buf).await?;
-    Ok(buf)
-}
-
-async fn write_frame<S: AsyncWrite + Unpin>(stream: &mut S, data: &[u8]) -> anyhow::Result<()> {
-    stream.write_u32(data.len() as u32).await?;
-    stream.write_all(data).await?;
-    stream.flush().await?;
-    Ok(())
-}
 
 /// A route the user asked this agent to expose.
 #[derive(Debug, Clone)]
@@ -99,26 +80,29 @@ async fn reserve(
     specs: &[RouteSpec],
     node_id: Option<&str>,
 ) -> Result<Reservation> {
-    let body = RequestTunnelReq {
-        routes: specs
-            .iter()
-            .map(|s| RequestedRoute {
-                mode: s.mode,
-                local_port: s.local_port,
-            })
-            .collect(),
-        node_id: node_id.map(|s| s.to_string()),
+    let mut routes = Vec::new();
+    for s in specs {
+        routes.push(RequestedRoute {
+            mode: s.mode,
+            local_port: s.local_port,
+        });
+    }
+    let node_id = match node_id {
+        Some(s) => Some(s.to_string()),
+        None => None,
     };
+    let body = RequestTunnelReq { routes, node_id };
     let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("{control_plane}/api/tunnels/request"))
-        .bearer_auth(session_token)
-        .json(&body)
-        .send()
-        .await?;
+    let request = client.post(format!("{control_plane}/api/tunnels/request"));
+    let request = request.bearer_auth(session_token);
+    let request = request.json(&body);
+    let resp = request.send().await?;
     if !resp.status().is_success() {
         let code = resp.status();
-        let msg = resp.text().await.unwrap_or_default();
+        let msg = match resp.text().await {
+            Ok(v) => v,
+            Err(_) => String::new(),
+        };
         return Err(anyhow!("tunnel request failed: {code} {msg}"));
     }
     Ok(resp.json().await?)
@@ -146,9 +130,11 @@ pub async fn run(
 
     loop {
         // Connect to the node hosting the tunnel; --tunnel-server overrides (dev).
-        let target = tunnel_server
-            .unwrap_or(reservation.control_endpoint.as_str())
-            .to_string();
+        let endpoint = match tunnel_server {
+            Some(v) => v,
+            None => reservation.control_endpoint.as_str(),
+        };
+        let target = endpoint.to_string();
         match connect_and_serve(&target, &reservation).await {
             Ok(()) => warn!("tunnel session ended; reconnecting in 3s…"),
             Err(e) => warn!("tunnel error ({e}); reconnecting in 3s…"),
@@ -201,7 +187,10 @@ pub async fn run_device(
                 continue;
             }
         };
-        let want: HashSet<i64> = services.iter().map(|r| r.tunnel_id).collect();
+        let mut want: HashSet<i64> = HashSet::new();
+        for r in &services {
+            want.insert(r.tunnel_id);
+        }
 
         // Stop tasks for services that were removed; drop finished tasks so the spawn
         // pass below respawns them with the freshly fetched reservation.
@@ -220,9 +209,11 @@ pub async fn run_device(
             if tasks.contains_key(&reservation.tunnel_id) {
                 continue;
             }
-            let target = tunnel_server
-                .unwrap_or(reservation.control_endpoint.as_str())
-                .to_string();
+            let endpoint = match tunnel_server {
+                Some(v) => v,
+                None => reservation.control_endpoint.as_str(),
+            };
+            let target = endpoint.to_string();
             info!(
                 "serving '{}' ({}) with {} route(s)",
                 reservation.subdomain,
@@ -252,14 +243,15 @@ pub async fn run_device(
 
 async fn fetch_config(control_plane: &str, device_token: &str) -> Result<Vec<Reservation>> {
     let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{control_plane}/api/devices/me/config"))
-        .bearer_auth(device_token)
-        .send()
-        .await?;
+    let request = client.get(format!("{control_plane}/api/devices/me/config"));
+    let request = request.bearer_auth(device_token);
+    let resp = request.send().await?;
     if !resp.status().is_success() {
         let code = resp.status();
-        let msg = resp.text().await.unwrap_or_default();
+        let msg = match resp.text().await {
+            Ok(v) => v,
+            Err(_) => String::new(),
+        };
         return Err(anyhow!("config fetch failed: {code} {msg}"));
     }
     Ok(resp.json().await?)
@@ -275,42 +267,43 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
     // error within ~50s, and the outer loop re-reserves and reconnects from the current
     // interface. Mirrors the keepalive the core sets on the accepted side.
     {
-        let ka = socket2::TcpKeepalive::new()
-            .with_time(std::time::Duration::from_secs(20))
-            .with_interval(std::time::Duration::from_secs(10))
-            .with_retries(3);
+        let ka = socket2::TcpKeepalive::new();
+        let ka = ka.with_time(std::time::Duration::from_secs(20));
+        let ka = ka.with_interval(std::time::Duration::from_secs(10));
+        let ka = ka.with_retries(3);
         let _ = socket2::SockRef::from(&tcp).set_tcp_keepalive(&ka);
     }
     // TCP_NODELAY on the control channel, mirroring the core side: flush small yamux
     // frames immediately so interactive traffic stays low-latency.
     let _ = tcp.set_nodelay(true);
-    let fingerprint = reservation
-        .control_cert_fingerprint
-        .as_deref()
-        .ok_or_else(|| anyhow!("reservation did not include a control certificate fingerprint"))?;
+    let fingerprint = match reservation.control_cert_fingerprint.as_deref() {
+        Some(v) => v,
+        None => {
+            return Err(anyhow!(
+                "reservation did not include a control certificate fingerprint"
+            ));
+        }
+    };
     let mut socket = crate::tls::connect(tcp, fingerprint).await?;
 
     // route_id -> (mode, local_port), learned from the reservation. The mode tells
     // handle_stream whether to bridge a local TCP connection or relay UDP datagrams.
-    let routes: Arc<HashMap<u16, (RouteMode, u16)>> = Arc::new(
-        reservation
-            .routes
-            .iter()
-            .map(|r| (r.route_id, (r.mode, r.local_port)))
-            .collect(),
-    );
-    let bindings: Vec<AgentRouteBinding> = reservation
-        .routes
-        .iter()
-        .map(|r| AgentRouteBinding {
+    let mut route_map: HashMap<u16, (RouteMode, u16)> = HashMap::new();
+    for r in &reservation.routes {
+        route_map.insert(r.route_id, (r.mode, r.local_port));
+    }
+    let routes: Arc<HashMap<u16, (RouteMode, u16)>> = Arc::new(route_map);
+    let mut bindings: Vec<AgentRouteBinding> = Vec::new();
+    for r in &reservation.routes {
+        bindings.push(AgentRouteBinding {
             route_id: r.route_id,
             local_port: r.local_port,
-        })
-        .collect();
+        });
+    }
 
     let hello = AgentHello {
         tunnel_token: reservation.tunnel_token.clone(),
-        role: "service_host".to_string(),
+        role: ROLE_SERVICE_HOST.to_string(),
         routes: bindings,
     };
     write_frame(&mut socket, &serde_json::to_vec(&hello)?).await?;
@@ -325,7 +318,10 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
             info!("════════════════════════════════════════════════════");
             info!(" Tunnel LIVE  (tunnel {tunnel_id}, subdomain {subdomain})");
             for r in &confirmed {
-                let local = routes.get(&r.route_id).map(|(_, p)| *p).unwrap_or(0);
+                let local = match routes.get(&r.route_id) {
+                    Some((_, p)) => *p,
+                    None => 0,
+                };
                 info!(
                     "   route {} [{:?}]  {}  ->  127.0.0.1:{}",
                     r.route_id, r.mode, r.public_endpoint, local
@@ -338,8 +334,10 @@ async fn connect_and_serve(tunnel_server: &str, reservation: &Reservation) -> Re
         }
     }
 
-    // Upgrade to a yamux server session.
-    let mut conn = Connection::new(socket.compat(), YamuxConfig::default(), Mode::Server);
+    // Upgrade to a yamux server session. Larger send frames help bulk throughput.
+    let mut ycfg = YamuxConfig::default();
+    ycfg.set_split_send_size(64 * 1024);
+    let mut conn = Connection::new(socket.compat(), ycfg, Mode::Server);
     loop {
         match poll_fn(|cx| conn.poll_next_inbound(cx)).await {
             Some(Ok(stream)) => {
@@ -391,7 +389,7 @@ async fn handle_stream(stream: yamux::Stream, routes: Arc<HashMap<u16, (RouteMod
         warn!("failed writing replay to local service: {e}");
         return;
     }
-    if let Err(e) = copy_bidirectional(&mut remote, &mut local).await {
+    if let Err(e) = copy_bidirectional_with_sizes(&mut remote, &mut local, 65536, 65536).await {
         warn!("local relay closed: {e}");
     }
 }

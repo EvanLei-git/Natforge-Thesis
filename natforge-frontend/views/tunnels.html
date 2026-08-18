@@ -58,18 +58,15 @@
             } catch (err) { toast(err.message, 'danger'); }
         }
 
-        function stat(label, value, cls, ic) {
-            return `<div class="stat ${cls || ''}"><div class="flex between"><div class="label">${label}</div>${nfIcon(ic)}</div><div class="value">${value}</div></div>`;
-        }
         function renderStats(list) {
             const active = list.filter(t => t.status === 'online').length;
             let din = 0, dout = 0;
             list.forEach(t => { din += t.bytes_in; dout += t.bytes_out; });
             document.getElementById('tunnelStats').innerHTML =
-                stat('Active tunnels', active, 'green', 'service') +
-                stat('Traffic in', fmtBytes(din), '', 'download') +
-                stat('Traffic out', fmtBytes(dout), '', 'upload') +
-                stat('Total traffic', fmtBytes(din + dout), '', 'activity');
+                nfStatCard('Active tunnels', active, 'green', 'service') +
+                nfStatCard('Traffic in', fmtBytes(din), '', 'download') +
+                nfStatCard('Traffic out', fmtBytes(dout), '', 'upload') +
+                nfStatCard('Total traffic', fmtBytes(din + dout), '', 'activity');
         }
 
         // The public port a route exposes: the dedicated port for tcp/udp/both, or the

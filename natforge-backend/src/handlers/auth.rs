@@ -19,11 +19,14 @@ async fn geo_gate(state: &SharedState, headers: &HeaderMap) -> Result<(), (Statu
     let Some(country) = state.geo.country_from_headers(headers) else {
         return Ok(());
     };
-    let blocked = queries::region_blocks(&state.db.pg)
-        .await
-        .map_err(db_err)?
-        .iter()
-        .any(|c| c.eq_ignore_ascii_case(&country));
+    let blocks = queries::region_blocks(&state.db.pg).await.map_err(db_err)?;
+    let mut blocked = false;
+    for c in &blocks {
+        if c.eq_ignore_ascii_case(&country) {
+            blocked = true;
+            break;
+        }
+    }
     if blocked {
         tracing::warn!("rejected auth from geo-blocked country {country}");
         return Err((
@@ -64,12 +67,7 @@ pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
     }
 }
 
-fn db_err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("database error: {e}"),
-    )
-}
+use crate::handlers::db_err;
 
 pub async fn register_user(
     State(state): State<SharedState>,
@@ -124,9 +122,20 @@ pub async fn login_user(
     let user = queries::user_by_email(&state.db.pg, &email)
         .await
         .map_err(db_err)?;
-    let user = user
-        .filter(|u| verify_password(&payload.password, &u.password_hash))
-        .ok_or((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()))?;
+    let verified = match user {
+        Some(u) => {
+            if verify_password(&payload.password, &u.password_hash) {
+                Some(u)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+    let user = match verified {
+        Some(u) => u,
+        None => return Err((StatusCode::UNAUTHORIZED, "invalid credentials".to_string())),
+    };
     if user.banned {
         return Err((StatusCode::FORBIDDEN, "this account is banned".into()));
     }
@@ -145,9 +154,13 @@ pub async fn login_user(
 
 fn random_code(len: usize, charset: &[u8]) -> String {
     let mut rng = rand::thread_rng();
-    (0..len)
-        .map(|_| charset[rng.gen_range(0..charset.len())] as char)
-        .collect()
+    let mut code = String::new();
+    for _ in 0..len {
+        let idx = rng.gen_range(0..charset.len());
+        let ch = charset[idx] as char;
+        code.push(ch);
+    }
+    code
 }
 
 #[derive(Serialize)]

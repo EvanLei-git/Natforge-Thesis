@@ -150,22 +150,36 @@ pub async fn refresh_policy(state: &Arc<CoreState>) {
     if let Ok(r) = resp
         && let Ok(v) = r.json::<serde_json::Value>().await
     {
-        if let Some(regions) = v.get("blocked_regions").and_then(|p| p.as_array()) {
-            let list: Vec<String> = regions
-                .iter()
-                .filter_map(|c| c.as_str().map(|s| s.to_uppercase()))
-                .collect();
+        let blocked_regions_val = v.get("blocked_regions");
+        let blocked_regions_arr = match blocked_regions_val {
+            Some(p) => p.as_array(),
+            None => None,
+        };
+        if let Some(regions) = blocked_regions_arr {
+            let mut list: Vec<String> = Vec::new();
+            for c in regions {
+                if let Some(s) = c.as_str() {
+                    list.push(s.to_uppercase());
+                }
+            }
             *state.blocked_regions.write().await = list;
         }
         // tunnel_region_blocks: { "<tunnel_id>": ["US","DE"], ... }
-        if let Some(map) = v.get("tunnel_region_blocks").and_then(|m| m.as_object()) {
+        let tunnel_blocks_val = v.get("tunnel_region_blocks");
+        let tunnel_blocks_obj = match tunnel_blocks_val {
+            Some(m) => m.as_object(),
+            None => None,
+        };
+        if let Some(map) = tunnel_blocks_obj {
             let mut out = std::collections::HashMap::new();
             for (k, val) in map {
                 if let (Ok(tid), Some(arr)) = (k.parse::<i64>(), val.as_array()) {
-                    let codes: Vec<String> = arr
-                        .iter()
-                        .filter_map(|c| c.as_str().map(|s| s.to_uppercase()))
-                        .collect();
+                    let mut codes: Vec<String> = Vec::new();
+                    for c in arr {
+                        if let Some(s) = c.as_str() {
+                            codes.push(s.to_uppercase());
+                        }
+                    }
                     if !codes.is_empty() {
                         out.insert(tid, codes);
                     }

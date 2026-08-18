@@ -13,10 +13,15 @@ use crate::db::queries;
 const INTERNAL_HEADER: &str = "x-internal-secret";
 
 fn check_secret(state: &SharedState, headers: &HeaderMap) -> Result<(), (StatusCode, String)> {
-    let provided = headers
-        .get(INTERNAL_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let header_value = headers.get(INTERNAL_HEADER);
+    let header_str = match header_value {
+        Some(v) => v.to_str().ok(),
+        None => None,
+    };
+    let provided = match header_str {
+        Some(s) => s,
+        None => "",
+    };
     if provided == state.config.internal_secret {
         Ok(())
     } else {
@@ -24,9 +29,7 @@ fn check_secret(state: &SharedState, headers: &HeaderMap) -> Result<(), (StatusC
     }
 }
 
-fn err<E: std::fmt::Display>(e: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-}
+use crate::handlers::err;
 
 #[derive(Deserialize)]
 pub struct TunnelUpReq {
@@ -153,10 +156,13 @@ pub async fn policy(
         .await
         .map_err(err)?;
     // Stringify the i64 keys so the map round-trips cleanly as JSON.
-    let per_tunnel: std::collections::HashMap<String, Vec<String>> = per_tunnel
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
+    let mut per_tunnel_json: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (k, v) in per_tunnel {
+        let key = k.to_string();
+        per_tunnel_json.insert(key, v);
+    }
+    let per_tunnel = per_tunnel_json;
     Ok(Json(json!({
         "blocked_regions": regions,
         "tunnel_region_blocks": per_tunnel,

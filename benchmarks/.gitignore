@@ -1,0 +1,9 @@
+# Downloaded comparison baseline (see METHODOLOGY.md step 2)
+frps
+frpc
+frp.tgz
+frp_*_linux_amd64/
+# Compiled load tool + python env (regenerated locally)
+bench
+venv/
+__pycache__/

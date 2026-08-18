@@ -93,18 +93,27 @@ fn fingerprint_of(cert: &CertificateDer<'_>) -> String {
 /// TLS-wrap an established TCP stream to the core, pinning its cert fingerprint.
 pub async fn connect(tcp: TcpStream, fingerprint: &str) -> Result<TlsStream<TcpStream>> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = ClientConfig::builder_with_provider(provider.clone())
-        .with_safe_default_protocol_versions()
-        .map_err(|e| anyhow!("tls protocol versions: {e}"))?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(PinnedCert {
-            fingerprint: fingerprint.to_string(),
-            provider,
-        }))
-        .with_no_client_auth();
+    let builder = ClientConfig::builder_with_provider(provider.clone());
+    let builder = match builder.with_safe_default_protocol_versions() {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(anyhow!("tls protocol versions: {e}"));
+        }
+    };
+    let verifier = Arc::new(PinnedCert {
+        fingerprint: fingerprint.to_string(),
+        provider,
+    });
+    let dangerous = builder.dangerous();
+    let config = dangerous.with_custom_certificate_verifier(verifier);
+    let config = config.with_no_client_auth();
     let connector = TlsConnector::from(Arc::new(config));
     // The pin authenticates the peer; the SNI name is cosmetic (cert SAN matches).
-    let server_name =
-        ServerName::try_from("natforge-node").map_err(|_| anyhow!("bad server name"))?;
+    let server_name = match ServerName::try_from("natforge-node") {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(anyhow!("bad server name"));
+        }
+    };
     Ok(connector.connect(server_name, tcp).await?)
 }
