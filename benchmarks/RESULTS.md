@@ -18,7 +18,7 @@ used purely as a comparison baseline.
 NatForge has lower latency than frp at every concurrency level, and its tail (p99)
 stays single-digit-ms where frp climbs to 18-65 ms.
 
-## Throughput (single 10 MiB transfer, 4 streams)
+## Throughput (10 MiB replies over 4 connections, 8 s)
 
 | system   | MiB/s | Gbit/s |
 |----------|------:|-------:|
@@ -32,20 +32,25 @@ real deployment throughput is bounded by the network link, not the relay.
 
 ## Memory footprint (RSS under 100-connection load)
 
-Sampled once per second over a sustained 100-connection load (12 samples each):
+Measured by `memory.sh`: starting from fresh processes, 12 rounds of the same
+100-connection load (16 s each), sampled once per second for 12 s of every round
+(144 samples each). Raw samples are in `memory.csv`.
 
 | system   | median | range (min-max) |
 |----------|-------:|----------------:|
-| NatForge | 40 MB  | 40 - 40 MB      |
-| frp      | 226 MB | 142 - 365 MB    |
+| NatForge | 58 MB  | 26 - 63 MB      |
+| frp      | 192 MB | 123 - 407 MB    |
 
-The two behave completely differently, and the range matters more than any single number.
-NatForge (Rust, no garbage collector) holds a **flat** 40 MB: all 12 samples read exactly
-40 MB. frp (Go) **oscillates** between 142 and 365 MB second to second as its garbage
-collector grows the heap and then returns memory to the OS, so any single reading (earlier
-runs happened to catch 178 and 310) is just a snapshot of that sawtooth. Taken as a range,
-frp uses roughly 4-9x NatForge's memory; and for a long-running relay the more important
-property is that NatForge's footprint is small *and predictable*.
+The two vary for different reasons. NatForge (Rust, no garbage collector) does not move
+at all within a round: all 12 samples of every round are identical. Each new batch of
+connections steps it up instead (26 MB in the first round, 40 in the second, 47 in the
+third) until it levels off at 57-63 MB from the sixth round on. Memory freed when
+connections close stays with the allocator rather than going back to the OS, so the RSS
+tracks the most the relay has needed so far; it stops climbing, so this is not a leak.
+frp (Go) swings by 110-270 MB inside every round as its garbage collector grows the heap
+and returns memory to the OS, so any single reading is a snapshot of that sawtooth.
+Comparing medians, frp uses about 3.3x NatForge's memory, and NatForge's footprint is the
+predictable one.
 
 Figures: fig1 (latency: solid = median, dashed = p99 tail), fig2 (throughput), fig3 (memory).
 Loopback isolates the relay software; real-network (CGNAT) latency over the deployed

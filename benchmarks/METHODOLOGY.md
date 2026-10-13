@@ -18,12 +18,6 @@ measure the relay software itself, not a variable internet path. The **same orig
 the **same load generator** drive all three targets; only the address (and Host header)
 differ, which is what makes the comparison fair.
 
-```
-load generator --> direct        :9000
-                --> NatForge node :18080 --> agent --> origin :9000
-                --> frp  frps     :18090 --> frpc  --> origin :9000
-```
-
 - **origin**: a small fixed-response HTTP server standing in for the user's local
   service. Its response size comes from the URL path (`/64` = a 64-byte body for latency,
   `/10485760` = 10 MiB for throughput). It is fast enough never to be the bottleneck.
@@ -53,8 +47,10 @@ CGNAT path, residential uplink) is a separate measurement.
 
 ## Files in this folder
 - `bench.rs` - origin + load generator, one plain-`std` Rust file.
+- `memory.sh` - the memory measurement (step 12).
 - `plot.py` - draws the three charts from `results.csv`.
 - `results.csv` - the measured numbers (already filled in from the run in `RESULTS.md`).
+- `memory.csv` - every raw memory sample from that run.
 - `fig1_latency.png`, `fig2_throughput.png`, `fig3_memory.png` - the charts.
 - `RESULTS.md` - the numbers written up as tables.
 - `METHODOLOGY.md` - this file.
@@ -140,7 +136,7 @@ curl -s 127.0.0.1:18090/64 -H "Host: frp.natforge.com"   | wc -c   # frp
 **9. Latency sweep: a 64-byte reply, 8 s per point, at rising concurrency.**
 ```sh
 csv=results.csv
-echo "test,system,conns,requests,rps,mib_s,p50_ms,p95_ms,p99_ms,rss_mb" > "$csv"
+echo "test,system,conns,requests,rps,mib_s,p50_ms,p95_ms,p99_ms,rss_mb,rss_min,rss_max" > "$csv"
 for conns in 1 10 50 100 200; do
   echo "latency,direct,$(  ./bench load 127.0.0.1:9000  x                  /64 "$conns" 8)," >> "$csv"
   echo "latency,natforge,$(./bench load 127.0.0.1:18080 "$sub.natforge.com" /64 "$conns" 8)," >> "$csv"
@@ -148,36 +144,37 @@ for conns in 1 10 50 100 200; do
 done
 ```
 
-**10. Throughput: one 10 MiB reply over 4 connections, 8 s.**
+**10. Throughput: 10 MiB replies, back to back over 4 connections for 8 s.**
 ```sh
 echo "throughput,direct,$(  ./bench load 127.0.0.1:9000  x                  /10485760 4 8)," >> "$csv"
 echo "throughput,natforge,$(./bench load 127.0.0.1:18080 "$sub.natforge.com" /10485760 4 8)," >> "$csv"
 echo "throughput,frp,$(     ./bench load 127.0.0.1:18090 frp.natforge.com   /10485760 4 8)," >> "$csv"
 ```
 
-**11. Memory: total RSS (MB) of each relay's processes while busy.**
-Match processes by exact name with `pgrep -x` (NatForge relay = the `natforge-node`
-process plus the agent, whose process name is `natforge`; frp = `frps` + `frpc`).
+**11. Stop everything started in steps 5-7.**
+`pkill -x` cannot match `natforge-backend` because Linux cuts process names to 15
+characters, so the backend and the origin are matched by command line instead.
 ```sh
-rss() { local t=0 pid kb; for pid in $(pgrep -x "$1"); do
-          kb=$(awk '/VmRSS/{print $2}' /proc/"$pid"/status 2>/dev/null); t=$((t+${kb:-0}));
-        done; echo $((t/1024)); }
-./bench load 127.0.0.1:18080 "$sub.natforge.com" /64 100 6 >/dev/null & sleep 3
-nf=$(( $(rss natforge-node) + $(rss natforge) )); wait
-./bench load 127.0.0.1:18090 frp.natforge.com /64 100 6 >/dev/null & sleep 3
-fp=$(( $(rss frps) + $(rss frpc) )); wait
-echo "memory,natforge,,,,,,,,$nf" >> "$csv"
-echo "memory,frp,,,,,,,,$fp"      >> "$csv"
+pkill -x natforge-node; pkill -f "natforge service-host"; pkill -f target/release/natforge-backend
+pkill -x frps; pkill -x frpc; pkill -f "bench serve"
 ```
 
-**12. Draw the charts (needs matplotlib; use a venv if system Python is externally managed).**
+**12. Memory: RSS of each relay's two processes, 12 rounds of 12 samples.**
+`memory.sh` starts its own fresh copy of the steps 5-7 stack, with a throwaway PostgreSQL
+and Redis on ports 55432 and 56379 so your own database is not touched. It then runs 12
+rounds of the same 100-connection `/64` load against each relay. Each round lasts 16 s and
+is sampled once per second for 12 s, taking the summed VmRSS of `natforge-node` + agent, or
+of `frps` + `frpc`: 144 samples per relay. Sampling across rounds as well as within one
+matters: NatForge's RSS is flat inside a round but steps up as each new batch of
+connections arrives (freed memory stays with the allocator instead of going back to the
+OS), while frp's moves with its garbage collector from second to second. Every sample goes
+to `memory.csv`; the median, min and max go to the `memory` rows of `results.csv`.
+```sh
+bash memory.sh
+```
+
+**13. Draw the charts (needs matplotlib; use a venv if system Python is externally managed).**
 ```sh
 python3 -m venv venv && venv/bin/pip install matplotlib
 venv/bin/python plot.py     # writes fig1_latency.png, fig2_throughput.png, fig3_memory.png
-```
-
-**13. Stop everything when done.**
-```sh
-pkill -x natforge-node; pkill -x natforge; pkill -x natforge-backend
-pkill -x frps; pkill -x frpc; pkill -f "$PWD/bench"
 ```

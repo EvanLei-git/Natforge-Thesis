@@ -100,8 +100,8 @@ save("fig2_throughput")
 
 # ---------------------------------------------------------------------------
 # Figure 3: memory used while busy.
-# NatForge (Rust, no GC) holds a flat footprint; frp (Go) swings with every GC
-# cycle, so it is drawn with a whisker spanning the observed min..max (bar = median).
+# Each system is drawn as the median of its samples, with a whisker spanning the
+# observed min..max (see memory.sh for how the samples are taken).
 # ---------------------------------------------------------------------------
 memory = {}
 for row in rows_for("memory"):
@@ -145,7 +145,7 @@ for index, system in enumerate(systems):
     median = medians[index]
     top_of_whisker = median + upper_whisker[index]
 
-    # Only show a (min-max) range when it actually varies (frp does, NatForge does not).
+    # Only show a (min-max) range when the samples actually vary.
     if row["rss_min"] == row["rss_max"]:
         range_text = ""
     else:
@@ -154,9 +154,14 @@ for index, system in enumerate(systems):
     plt.text(index, top_of_whisker, f"{median:.0f} MB{range_text}", ha="center", va="bottom")
 
 plt.ylabel("memory under load (MB)")
-plt.title("Memory while handling 100 connections\n(bar = median, whisker = min..max over 12 samples)")
+plt.title("Memory while handling 100 connections\n(bar = median, whisker = min..max over 144 samples)")
 plt.grid(True, axis="y", alpha=0.3)
-plt.ylim(0, 420)
+
+# Leave room above the tallest whisker for its label.
+highest = 0
+for index in range(len(systems)):
+    highest = max(highest, medians[index] + upper_whisker[index])
+plt.ylim(0, highest * 1.15)
 save("fig3_memory")
 
 print("wrote fig1_latency, fig2_throughput, fig3_memory")
